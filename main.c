@@ -33,15 +33,15 @@
 // 1. THE C11 LOCK-FREE TRIPLE-BUFFER MAILBOX
 // =====================================================================
 typedef struct {
-    alignas(64) _Atomic int ready_index; 
-    _Atomic int is_running;  
+    alignas(64) _Atomic int ready_index;
+    _Atomic int is_running;
     _Atomic int lua_finished; // The anti-deadlock handshake flag
 } IPC_Mailbox;
 
 typedef struct {
     IPC_Mailbox mailbox;
-    int render_index; 
-    int write_index;  
+    int render_index;
+    int write_index;
 } EngineState;
 
 static EngineState g_engine;
@@ -53,8 +53,8 @@ EXPORT int vibe_get_is_running() {
 
 EXPORT int vibe_publish_and_get_next_buffer() {
     g_engine.write_index = atomic_exchange_explicit(
-        &g_engine.mailbox.ready_index, 
-        g_engine.write_index, 
+        &g_engine.mailbox.ready_index,
+        g_engine.write_index,
         memory_order_release
     );
     return g_engine.write_index;
@@ -70,17 +70,17 @@ EXPORT void vibe_mark_lua_finished() {
 
 // --- INTERNAL C ROUTINES ---
 void vibe_init_mailbox() {
-    atomic_init(&g_engine.mailbox.ready_index, 0); 
+    atomic_init(&g_engine.mailbox.ready_index, 0);
     atomic_init(&g_engine.mailbox.is_running, 1);
-    atomic_init(&g_engine.mailbox.lua_finished, 0); 
-    g_engine.render_index = 1; 
-    g_engine.write_index = 2;  
+    atomic_init(&g_engine.mailbox.lua_finished, 0);
+    g_engine.render_index = 1;
+    g_engine.write_index = 2;
 }
 
 void vibe_acquire_newest_frame() {
     g_engine.render_index = atomic_exchange_explicit(
-        &g_engine.mailbox.ready_index, 
-        g_engine.render_index, 
+        &g_engine.mailbox.ready_index,
+        g_engine.render_index,
         memory_order_acquire
     );
 }
@@ -88,30 +88,30 @@ void vibe_acquire_newest_frame() {
 // =====================================================================
 // 2. MAIN ENTRY POINT
 // =====================================================================
-THREAD_FUNC lua_co_overlord_loop(void* arg) { 
-    printf("[LUA-OS-THREAD] Booting Lua VM...\n"); 
-    lua_State* L = luaL_newstate(); 
-    luaL_openlibs(L); 
-    if (luaL_dofile(L, "main.lua") != LUA_OK) { 
-        printf("\n[LUA FATAL ERROR] %s\n", lua_tostring(L, -1)); 
-    } 
-    lua_close(L); 
-    printf("[LUA-OS-THREAD] VM Destroyed.\n"); 
-    return THREAD_RETURN_VAL; 
-} 
+THREAD_FUNC lua_co_overlord_loop(void* arg) {
+    printf("[LUA-OS-THREAD] Booting Lua VM...\n");
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    if (luaL_dofile(L, "main.lua") != LUA_OK) {
+        printf("\n[LUA FATAL ERROR] %s\n", lua_tostring(L, -1));
+    }
+    lua_close(L);
+    printf("[LUA-OS-THREAD] VM Destroyed.\n");
+    return THREAD_RETURN_VAL;
+}
 
-int main(int argc, char** argv) { 
-    printf("[C-CORE] Booting Minified Concurrent Pipeline...\n"); 
+int main(int argc, char** argv) {
+    printf("[C-CORE] Booting Minified Concurrent Pipeline...\n");
 
     vibe_init_mailbox();
-    
+
     // Spawn the Lua thread
-    vmath_thread_t lua_thread = vmath_thread_start(lua_co_overlord_loop, NULL); 
+    vmath_thread_t lua_thread = vmath_thread_start(lua_co_overlord_loop, NULL);
 
     int frame_count = 0;
 
     // THE SIMULATED RENDER LOOP
-    while (vibe_get_is_running()) { 
+    while (vibe_get_is_running()) {
         // 1. Grab newest frame from Lua
         vibe_acquire_newest_frame();
 
@@ -120,21 +120,21 @@ int main(int argc, char** argv) {
             printf("[C-RENDER] Drawing from Buffer Index: %d\n", g_engine.render_index);
         }
         frame_count++;
-        
-        // 3. Sleep ~16ms to simulate a 60FPS V-Sync (and save your CPU)
-        SLEEP_MS(16); 
-    } 
 
-    printf("\n[C-CORE] Shutdown triggered. Waiting for Lua handshake...\n"); 
-    
+        // 3. Sleep ~16ms to simulate a 60FPS V-Sync (and save your CPU)
+        SLEEP_MS(16);
+    }
+
+    printf("\n[C-CORE] Shutdown triggered. Waiting for Lua handshake...\n");
+
     // The Anti-Deadlock Spin-Wait
     while (atomic_load_explicit(&g_engine.mailbox.lua_finished, memory_order_acquire) == 0) {
         SLEEP_MS(1); // Non-blocking wait
     }
 
     // Handshake received. Safe to reel in the thread.
-    vmath_thread_join(lua_thread); 
-    
-    printf("[C-CORE] Clean Exit.\n"); 
-    return 0; 
+    vmath_thread_join(lua_thread);
+
+    printf("[C-CORE] Clean Exit.\n");
+    return 0;
 }
