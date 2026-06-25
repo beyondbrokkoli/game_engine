@@ -1,3 +1,4 @@
+-- lua/swapchain.lua
 local ffi = require("ffi")
 local reg = require("registry_vk")
 local vk_struct, vk_format, vk_image = reg.vk_struct, reg.vk_format, reg.vk_image
@@ -5,10 +6,13 @@ local vk_swapchain, vk_result = reg.vk_swapchain, reg.vk_result
 
 local Swapchain = {}
 
-function Swapchain.Init(vk, core_state, width, height, old_swapchain)
+function Swapchain.Init(vk, core_state, width, height, old_swapchain, explicit_surface)
     print("[SWAPCHAIN] Building the display chain...")
+
+    local surface = explicit_surface or core_state.surface
+
     local surfaceCaps = ffi.new("VkSurfaceCapabilitiesKHR")
-    vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(core_state.physicalDevice, core_state.surface, surfaceCaps)
+    vk.vkGetPhysicalDeviceSurfaceCapabilitiesKHR(core_state.physicalDevice, surface, surfaceCaps)
 
     if surfaceCaps.maxImageExtent.width == 0 or surfaceCaps.maxImageExtent.height == 0 then
         print("[SWAPCHAIN WARNING] Surface extent is 0x0 (Minimized/Transitioning). Aborting rebuild.")
@@ -27,7 +31,7 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain)
     local swapchainInfo = ffi.new("VkSwapchainCreateInfoKHR")
     ffi.fill(swapchainInfo, ffi.sizeof(swapchainInfo))
     swapchainInfo.sType = vk_struct.swapchain_create
-    swapchainInfo.surface = core_state.surface
+    swapchainInfo.surface = surface
     swapchainInfo.oldSwapchain = old_swapchain or ffi.cast("VkSwapchainKHR", 0)
     swapchainInfo.minImageCount = surfaceCaps.minImageCount + 1
     swapchainInfo.imageFormat = vk_format.b8g8r8a8_srgb
@@ -48,6 +52,7 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain)
         print("[SWAPCHAIN WARNING] Surface volatile. Retrying next frame...")
         return nil
     end
+
     assert(res == vk_result.success, "FATAL: Failed to create Swapchain! Error: " .. tonumber(res))
     local swapchain = pSwapchain[0]
 
@@ -59,11 +64,9 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain)
     vk.vkGetSwapchainImagesKHR(core_state.device, swapchain, pImageCount, images)
 
     local imageViews = ffi.new("VkImageView[?]", imageCount)
-
     for i = 0, imageCount - 1 do
         local viewInfo = ffi.new("VkImageViewCreateInfo")
         ffi.fill(viewInfo, ffi.sizeof(viewInfo))
-
         viewInfo.sType = vk_struct.image_view_create
         viewInfo.image = images[i]
         viewInfo.viewType = vk_image.view_type_2d
@@ -71,7 +74,6 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain)
         viewInfo.subresourceRange.aspectMask = vk_image.aspect_color
         viewInfo.subresourceRange.levelCount = 1
         viewInfo.subresourceRange.layerCount = 1
-
         assert(vk.vkCreateImageView(core_state.device, viewInfo, nil, imageViews + i) == vk_result.success)
     end
 

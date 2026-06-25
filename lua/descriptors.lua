@@ -1,27 +1,25 @@
+-- lua/descriptors.lua
 local ffi = require("ffi")
 local bit = require("bit")
 local reg = require("registry_vk")
-local config = require("config_engine")
 local vk_desc, vk_struct, vk_shader = reg.vk_desc, reg.vk_struct, reg.vk_shader_stage
 
 local Descriptors = {}
 
-function Descriptors.Init(vk, device, master_gpu_buffer, palette_haven_buffer)
+-- [NEW] Added gfx_cfg to the signature
+function Descriptors.Init(vk, device, master_gpu_buffer, palette_haven_buffer, gfx_cfg)
     print("[DESCRIPTORS] Wiring Master VRAM Arena & Palette Haven...")
 
     local STAGE_ALL = bit.bor(vk_shader.vert, vk_shader.frag)
 
-    -- We now have 2 bindings
     local ssboBindings = ffi.new("VkDescriptorSetLayoutBinding[2]")
 
-    -- Binding 0: The Lockstep Grid (ReBAR)
     ssboBindings[0].binding = 0
     ssboBindings[0].descriptorType = vk_desc.ssbo
     ssboBindings[0].descriptorCount = 1
     ssboBindings[0].stageFlags = STAGE_ALL
     ssboBindings[0].pImmutableSamplers = nil
 
-    -- Binding 1: The Color Palette (Device Local Haven)
     ssboBindings[1].binding = 1
     ssboBindings[1].descriptorType = vk_desc.ssbo
     ssboBindings[1].descriptorCount = 1
@@ -38,13 +36,12 @@ function Descriptors.Init(vk, device, master_gpu_buffer, palette_haven_buffer)
     assert(vk.vkCreateDescriptorSetLayout(device, layoutInfo, nil, pLayout) == 0, "FATAL: Layout Creation Failed")
     local unifiedSetLayout = pLayout[0]
 
-    -- 2. Push Constant Range (128-Byte Router)
+    -- [UPDATED] Uses the passed configuration instead of a global require
     local pushRange = ffi.new("VkPushConstantRange[1]")
     pushRange[0].stageFlags = STAGE_ALL
     pushRange[0].offset = 0
-    pushRange[0].size = config.cfg.pc_size
+    pushRange[0].size = gfx_cfg.pc_size
 
-    -- 3. Pipeline Layout (Unified Router)
     local pipeLayoutInfo = ffi.new("VkPipelineLayoutCreateInfo")
     ffi.fill(pipeLayoutInfo, ffi.sizeof(pipeLayoutInfo))
     pipeLayoutInfo.sType = vk_struct.pipeline_layout_create
@@ -57,10 +54,9 @@ function Descriptors.Init(vk, device, master_gpu_buffer, palette_haven_buffer)
     assert(vk.vkCreatePipelineLayout(device, pipeLayoutInfo, nil, pPipeLayout) == 0, "FATAL: Pipeline Layout Failed")
     local unifiedPipelineLayout = pPipeLayout[0]
 
-    -- 4. Descriptor Pool
     local poolSize = ffi.new("VkDescriptorPoolSize[1]")
     poolSize[0].type = vk_desc.ssbo
-    poolSize[0].descriptorCount = 2 -- Update pool size
+    poolSize[0].descriptorCount = 2
 
     local poolInfo = ffi.new("VkDescriptorPoolCreateInfo")
     ffi.fill(poolInfo, ffi.sizeof(poolInfo))
@@ -73,7 +69,6 @@ function Descriptors.Init(vk, device, master_gpu_buffer, palette_haven_buffer)
     assert(vk.vkCreateDescriptorPool(device, poolInfo, nil, pPool) == 0)
     local descriptorPool = pPool[0]
 
-    -- 5. Allocate and Update Descriptor Set
     local allocInfo = ffi.new("VkDescriptorSetAllocateInfo")
     ffi.fill(allocInfo, ffi.sizeof(allocInfo))
     allocInfo.sType = vk_struct.desc_set_alloc

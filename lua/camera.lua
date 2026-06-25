@@ -2,6 +2,7 @@ local ffi = require("ffi")
 local math = require("math")
 local bit = require("bit")
 local vmath = require("vmath")
+local WindowAPI = require("window_api") -- [ADDED] Route through our new API
 
 local Camera = {}
 
@@ -11,17 +12,19 @@ function Camera.new()
         yaw = 0.785398,
         pitch = 0.615472,
         pos = { x = 0.0, y = 0.0, z = 0.0 },
-        move_speed = 850.0,
+        move_speed = 1000.0,
         proj = ffi.new("mat4_t"),
         view = ffi.new("mat4_t")
     }
 end
 
-function Camera.update(cam, frame_time, mouse_x, mouse_y, width, height)
+-- [UPDATED] Pass win_id as the final parameter
+function Camera.update(cam, frame_time, mouse_x, mouse_y, width, height, win_id)
     local EDGE_THRESHOLD = 40.0
     local pan_x, pan_z = 0.0, 0.0
 
-    if ffi.C.vx_input_is_captured() == 1 then
+    -- [UPDATED] Use WindowAPI
+    if WindowAPI.is_captured(win_id) then
         if mouse_x < EDGE_THRESHOLD then pan_x = -1.0
         elseif mouse_x > width - EDGE_THRESHOLD then pan_x = 1.0 end
 
@@ -38,10 +41,11 @@ function Camera.update(cam, frame_time, mouse_x, mouse_y, width, height)
     cam.pos.x = cam.pos.x + (right_x * pan_x + fwd_x * -pan_z) * frame_speed
     cam.pos.z = cam.pos.z + (right_z * pan_x + fwd_z * -pan_z) * frame_speed
 
-    local wasd = ffi.C.vx_input_wasd()
+    -- [UPDATED] Use WindowAPI
+    local wasd = WindowAPI.get_wasd_mask(win_id)
     local zoom_dir = 0
-    if bit.band(wasd, 16) ~= 0 then zoom_dir = -1 end
-    if bit.band(wasd, 32) ~= 0 then zoom_dir = 1 end
+    if bit.band(wasd, 16) ~= 0 then zoom_dir = -1 end -- E key
+    if bit.band(wasd, 32) ~= 0 then zoom_dir = 1 end  -- Q key
 
     if zoom_dir ~= 0 then
         cam.ortho_zoom = cam.ortho_zoom * math.exp(zoom_dir * frame_time * 3.0)

@@ -40,19 +40,6 @@ local reg = {
             "VK_KHR_timeline_semaphore"
         }
     },
-    c_vk_structs = [[
-        typedef struct {
-            VkDevice device; VkQueue queue; VkQueue transfer_queue; VkSwapchainKHR swapchain;
-            uint64_t swapchain_images[10]; uint64_t swapchain_views[10];
-            VkSemaphore image_available[10]; VkSemaphore render_finished[10];
-            VkFence in_flight[10]; void* vkWaitForFences; void* vkAcquireNextImageKHR;
-            void* vkResetFences; void* vkQueueSubmit; void* vkQueuePresentKHR;
-            void* pfnBegin; void* pfnEnd; void* pfnSetCullMode; void* pfnSetFrontFace;
-            void* pfnSetPrimitiveTopology; void* pfnSetDepthTestEnable;
-            void* pfnSetDepthWriteEnable; void* pfnSetDepthCompareOp;
-        } RenderThreadInit;
-    ]]
 }
 
-ffi.cdef(reg.c_vk_structs)
 return reg

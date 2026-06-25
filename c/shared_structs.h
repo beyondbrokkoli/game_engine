@@ -7,35 +7,57 @@
 #define MODE_GEOM 1
 #define MODE_POINT_CLOUD_PASS 88
 #define MODE_POINTS 2
-#define CFG_FRAME_SLOTS 10
-#define CFG_GRID_CELLS 262144
-#define CFG_PC_SIZE 96
-#define CFG_PCOUNT 1000000
-#define CFG_ROLLBACK_BUFFER_SIZE 128
-#define CFG_SWAP_SLOTS 10
-#define CFG_SWARM_STATES 7
-#define CFG_USE_VALIDATION 0
-#define CFG_VK_API_VERSION 4206592
 #define FRAME_STATE_CONFIRMED 2
 #define FRAME_STATE_EMPTY 0
 #define FRAME_STATE_PREDICTED 1
+#define WORLD_GRID_CELLS 262144
 #define WORLD_MAP_HEIGHT 256
 #define WORLD_MAP_WIDTH 256
 #define WORLD_OFFSET_X 2560
 #define WORLD_OFFSET_Z 2560
 #define WORLD_SPACING 20
-typedef struct __attribute__((packed)) {
+
+// --- ENGINE MEMORY STRUCTURES ---
+#ifdef VX_ENABLE_VULKAN_STRUCTS
+typedef struct  {
+    VkDevice device;
+    VkQueue queue;
+    VkQueue transfer_queue;
+    VkSwapchainKHR swapchain;
+    uint64_t swapchain_images[10];
+    uint64_t swapchain_views[10];
+    VkSemaphore image_available[10];
+    VkSemaphore render_finished[10];
+    VkFence in_flight[10];
+    void* vkWaitForFences;
+    void* vkAcquireNextImageKHR;
+    void* vkResetFences;
+    void* vkQueueSubmit;
+    void* vkQueuePresentKHR;
+    void* pfnBegin;
+    void* pfnEnd;
+    void* pfnSetCullMode;
+    void* pfnSetFrontFace;
+    void* pfnSetPrimitiveTopology;
+    void* pfnSetDepthTestEnable;
+    void* pfnSetDepthWriteEnable;
+    void* pfnSetDepthCompareOp;
+} RenderThreadInit;
+
+#endif // VX_ENABLE_VULKAN_STRUCTS
+
+typedef struct  {
     float m[16];
 } mat4_t;
 
-typedef struct __attribute__((packed)) {
+typedef struct  {
     float px;
     float py;
     float pz;
     uint32_t tile_data;
 } RtsTileInstance;
 
-typedef struct __attribute__((packed)) {
+typedef struct  {
     mat4_t viewProj;
     uint32_t aos_current_idx;
     uint32_t aos_prev_idx;
@@ -47,7 +69,7 @@ typedef struct __attribute__((packed)) {
     uint8_t _pad_tail[4];
 } PushConstants;
 
-typedef struct __attribute__((packed)) {
+typedef struct  {
     uint64_t pipeline_id;
     uint64_t descriptor_set;
     uint32_t index_count;
@@ -71,10 +93,10 @@ typedef struct __attribute__((packed)) {
     uint8_t _pad_tail[2];
 } DrawCommand;
 
-typedef struct __attribute__((packed, aligned(64))) {
+typedef struct __attribute__((aligned(64))) {
     DrawCommand* draw_queue;
     uint32_t draw_count;
-    uint8_t _pad_auto_0[4];
+    uint32_t target_window_id;
     uint64_t gfx_layout;
     uint64_t vertex_buffer;
     uint64_t index_buffer;
@@ -87,45 +109,54 @@ typedef struct __attribute__((packed, aligned(64))) {
     uint8_t _pad_tail[48];
 } RenderPacket;
 
-typedef struct __attribute__((packed, aligned(8))) {
+#pragma pack(push, 1)
+typedef struct {
+    uint8_t opcode;
+    uint8_t flags;
+    uint16_t target_id;
+    uint32_t target_pos;
+} PlayerCommand;
+#pragma pack(pop)
+
+#pragma pack(push, 1)
+typedef struct {
     uint64_t session_token;
     uint32_t frame_tick;
-    uint32_t player_input;
-    int32_t click_grid_idx;
-    uint32_t past_inputs[7];
-    int32_t past_clicks[7];
-    uint8_t _pad_tail[4];
+    uint32_t checksum_tick;
+    uint32_t state_checksum;
+    uint32_t base_tick;
+    uint8_t player_id;
+    uint8_t history_count;
+    uint16_t _align_pad;
+    uint32_t peer_acks[8];
+    PlayerCommand commands[120][2];
 } LockstepPacket;
+#pragma pack(pop)
 
-typedef struct __attribute__((packed, aligned(4))) {
+typedef struct __attribute__((aligned(4))) {
     uint32_t tick;
-    uint32_t local_input;
-    uint32_t remote_input;
-    int32_t local_click;
-    int32_t remote_click;
     uint8_t state;
-    uint8_t _pad_tail[3];
-} RollbackFrame;
+    uint8_t _pad_auto_0[3];
+    uint32_t state_checksum;
+    uint32_t remote_checksum;
+    uint8_t remote_peer_id;
+    uint8_t _pad_auto_1[7];
+    PlayerCommand commands[8][2];
+} NetworkFrame;
 
-typedef struct __attribute__((packed, aligned(64))) {
-    RollbackFrame frames[128];
+typedef struct __attribute__((aligned(64))) {
     uint32_t head_tick;
     uint32_t confirmed_tick;
+    uint8_t is_rollback_active;
+    uint8_t _pad_auto_0[3];
     uint32_t rollback_target;
-    uint32_t is_rollback_active;
-    uint8_t _pad_tail[48];
+    uint8_t _pad_auto_1[136];
+    NetworkFrame frames[512];
+    uint8_t _pad_tail[40];
 } RollbackBuffer;
 
-#ifdef VX_ENABLE_VULKAN_STRUCTS
-        typedef struct {
-            VkDevice device; VkQueue queue; VkQueue transfer_queue; VkSwapchainKHR swapchain;
-            uint64_t swapchain_images[10]; uint64_t swapchain_views[10];
-            VkSemaphore image_available[10]; VkSemaphore render_finished[10];
-            VkFence in_flight[10]; void* vkWaitForFences; void* vkAcquireNextImageKHR;
-            void* vkResetFences; void* vkQueueSubmit; void* vkQueuePresentKHR;
-            void* pfnBegin; void* pfnEnd; void* pfnSetCullMode; void* pfnSetFrontFace;
-            void* pfnSetPrimitiveTopology; void* pfnSetDepthTestEnable;
-            void* pfnSetDepthWriteEnable; void* pfnSetDepthCompareOp;
-        } RenderThreadInit;
-    
-#endif // VX_ENABLE_VULKAN_STRUCTS
+typedef struct  {
+    uint16_t len;
+    uint8_t data[2048];
+} RxPacket;
+

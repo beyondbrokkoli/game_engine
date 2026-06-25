@@ -47,86 +47,86 @@ local function minify_lua(content)
     return table.concat(lines, "; ")
 end
 
-local function get_sorted_files()
+local function get_sorted_files(base_dir, entry_module)
     local sorted = {}
     local visited = {}
+    local visiting = {} -- Tracks current stack to catch circular requires
 
-    local function visit(file)
-        if visited[file] then return end
-        visited[file] = true
+    local function visit(module_name)
+        -- Convert Lua module syntax "folder.file" to "folder/file.lua"
+        local relative_path = module_name:gsub("%.", "/")
+        local file_path = base_dir .. "/" .. relative_path .. ".lua"
 
-        local f = io.open(file, "r")
+        -- Skip if already processed
+        if visited[file_path] then return end
+
+        -- Guard against circular dependencies locking up the minifier
+        if visiting[file_path] then
+            print("[!] WARNING: Circular dependency detected in: " .. module_name)
+            return
+        end
+
+        visiting[file_path] = true
+
+        local f = io.open(file_path, "r")
         if f then
             local content = f:read("*all")
             f:close()
+
+            -- Regex matches both require("x") and require 'x'
             for dep_match in content:gmatch('require%s*%(?%s*["\'](.-)["\']%s*%)?') do
-                local dep_name = dep_match:gsub("%.", "/")
-                if not dep_name:find("%.lua$") then dep_name = dep_name .. ".lua" end
-                visit(dep_name)
+                visit(dep_match)
             end
+        else
+            print("[!] WARNING: Could not open required module: " .. file_path)
         end
-        table.insert(sorted, file)
+
+        visiting[file_path] = false
+        visited[file_path] = true
+
+        -- Insert post-order: Dependencies are added BEFORE the files that require them
+        table.insert(sorted, file_path)
     end
 
-    -- Automatically trace dependencies starting from main.lua
-    visit("main.lua")
+    visit(entry_module)
     return sorted
 end
 
--- EXECUTION & MANUAL FILE SELECTION MATRIX
--- Comment out (--) any file you DO NOT want included in the snapshot.
-
 print("--- AI SNAPSHOT ---")
 
-local order = {
-    -- [ ENTRY POINTS ]
-    "main.lua",
---    "build.lua",
+-- 1. Dynamically resolve all Lua dependencies starting from main
+local order = get_sorted_files("lua", "main")
 
-    -- [ C-CORE ]
---    "c/main.c",
+-- 2. Append non-Lua files (C-core, shaders) that 'require()' won't catch
+local external_assets = {
+    "c/shared_structs.h",
     "c/vx_net.c",
---    "c/shared_structs.h",
-
-    -- [ LUA ENGINE MODULES ]
---    "lua/registry_vk.lua",
---    "lua/sequence.lua",
---    "lua/pipeline_manifest.lua",
---    "lua/vulkan_core.lua",
---    "lua/swapchain.lua",
---    "lua/descriptors.lua",
---    "lua/graphics_pipeline.lua",
---    "lua/compute_pipeline.lua",
---    "lua/renderer.lua",
---    "lua/renderer.lua",
---    "lua/memory.lua",
---    "lua/vmath.lua",
---    "lua/structs.lua",
---    "lua/config_engine.lua",
---    "lua/registry_export.lua",
---    "lua/network.lua",
---    "lua/camera.lua",
---    "lua/json_util.lua",
-
-    -- [ GLSL SHADERS & SSOT ]
---    "glsl/registry.glsl",
---    "glsl/shared.glsl",
---    "glsl/render.vert",
---    "glsl/render.frag",
+    "c/main.c",
+    "glsl/registry.glsl",
+    "glsl/shared.glsl",
+    "glsl/render.vert",
+    "glsl/render.frag"
 }
 
-for _, src in ipairs(order) do local f = io.open(src, "r") if f then
+for _, asset in ipairs(external_assets) do
+    table.insert(order, asset)
+end
+
+-- 3. Execute minification loop
+for _, src in ipairs(order) do
+    local f = io.open(src, "r")
+    if f then
         local content = f:read("*all")
         local minified_content = ""
 
-        -- Route GLSL and Compute shaders through the C minifier!
+        -- Route GLSL, Compute, and C files to the C minifier
         if src:match("%.c$") or src:match("%.h$") or src:match("%.glsl$") or src:match("%.comp$") or src:match("%.vert$") or src:match("%.frag$") then
             minified_content = minify_c(content)
         else
             minified_content = minify_lua(content)
         end
 
-        print("@@@ FILE: " .. src .. " @@@\n" .. minified_content)
+        print("@@@ FILE: " .. src .. " @@@\n" ..  minified_content)
         f:close()
     else
         print("@@@ FILE: " .. src .. " @@@\n-- [FILE NOT FOUND OR UNREADABLE] --")
