@@ -35,6 +35,15 @@ void vx_thread_start();
 void vx_transfer_setup(uint32_t q_family_index);
 int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val);
 
+// --- NEW VULKAN MULTI-TENANT & VALIDATION API ---
+void vx_stream_allocate_tenant(int wid, void* wsi, uint32_t gfx_family, uint32_t transfer_family);
+const char** vx_sys_glfw_extensions(uint32_t* count);
+void vx_sys_inject_validation(void* instance_ptr);
+void vx_sys_eject_validation(void* instance);
+
+// --- NEW INPUT API ---
+int vx_input_get_active_window();
+
 // OS & Time
 void Sleep(uint32_t dwMilliseconds);
 int usleep(uint32_t usec);

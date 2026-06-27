@@ -98,61 +98,43 @@ static VkCommandBuffer g_transfer_cmd_buffers[MAX_WINDOWS];
 static VkFence g_transfer_fences[MAX_WINDOWS] = {VK_NULL_HANDLE};
 
 // --- IPC & MAILBOX UTILITY ---
-// ========================================
 // [FUNCTION: vmath_thread_start]
-// ========================================
 static vmath_thread_t vmath_thread_start(void* (*func)(void*), void* arg) {
     pthread_t thread;
     pthread_create(&thread, NULL, func, arg);
     return thread;
 }
 
-// ========================================
 // [FUNCTION: vmath_thread_join]
-// ========================================
 static void vmath_thread_join(vmath_thread_t thread) {
     pthread_join(thread, NULL);
 }
 
-// ========================================
 // [FUNCTION: vx_core_is_running]
-// ========================================
 EXPORT int vx_core_is_running() { return L_R(g_engine.mailbox.is_running); }
 
-// ========================================
 // [FUNCTION: vx_core_shutdown]
-// ========================================
 EXPORT void vx_core_shutdown() { S(g_engine.mailbox.is_running, 0); }
 
-// ========================================
 // [FUNCTION: vx_core_mark_finished]
-// ========================================
 EXPORT void vx_core_mark_finished() { S(g_engine.mailbox.lua_finished, 1); }
 
-// ========================================
 // [FUNCTION: vx_sys_glfw_extensions]
-// ========================================
 EXPORT const char** vx_sys_glfw_extensions(uint32_t* count) { return glfwGetRequiredInstanceExtensions(count); }
 
-// ========================================
 // [FUNCTION: vx_sys_publish_instance]
-// ========================================
 EXPORT void vx_sys_publish_instance(int win_id, void* instance) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
     S(g_engine.mailbox.vk_instance[win_id], instance);
 }
 
-// ========================================
 // [FUNCTION: vx_sys_get_surface]
-// ========================================
 EXPORT void* vx_sys_get_surface(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return NULL;
     return L(g_engine.mailbox.vk_surface[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_sys_set_cmd]
-// ========================================
 EXPORT void vx_sys_set_cmd(int win_id, int cmd, int w, int h) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
     S_R(g_engine.mailbox.glfw_arg_w[win_id], w);
@@ -160,9 +142,7 @@ EXPORT void vx_sys_set_cmd(int win_id, int cmd, int w, int h) {
     S(g_engine.mailbox.glfw_cmd[win_id], cmd);
 }
 
-// ========================================
 // [FUNCTION: vx_init_mailbox]
-// ========================================
 void vx_init_mailbox() {
     atomic_init(&g_engine.mailbox.ready_index, 0);
     atomic_init(&g_engine.mailbox.is_running, 1);
@@ -194,24 +174,18 @@ void vx_init_mailbox() {
 }
 
 // --- INPUT & GLFW CALLBACKS ---
-// ========================================
 // [FUNCTION: vx_input_last_key]
-// ========================================
 EXPORT int vx_input_last_key(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return E_A(g_engine.mailbox.last_key_pressed[win_id], 0);
 }
 
-// ========================================
 // [FUNCTION: vx_input_get_active_window]
-// ========================================
 EXPORT int vx_input_get_active_window() {
     return L(g_engine.mailbox.active_window);
 }
 
-// ========================================
 // [FUNCTION: glfw_cursor_callback]
-// ========================================
 void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
@@ -242,9 +216,7 @@ void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     CLR(s_mouse_lock);
 }
 
-// ========================================
 // [FUNCTION: glfw_mouse_button_callback]
-// ========================================
 void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
@@ -270,9 +242,7 @@ void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int 
     }
 }
 
-// ========================================
 // [FUNCTION: vx_input_mouse_btn]
-// ========================================
 EXPORT int vx_input_mouse_btn(int win_id, int btn) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     if (btn == 0) return L(g_engine.mailbox.mouse_left[win_id]);
@@ -280,49 +250,37 @@ EXPORT int vx_input_mouse_btn(int win_id, int btn) {
     return 0;
 }
 
-// ========================================
 // [FUNCTION: vx_input_mouse_x]
-// ========================================
 EXPORT float vx_input_mouse_x(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
     return L(g_engine.mailbox.mouse_x[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_input_mouse_y]
-// ========================================
 EXPORT float vx_input_mouse_y(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
     return L(g_engine.mailbox.mouse_y[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_input_click_x]
-// ========================================
 EXPORT float vx_input_click_x(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return -1.0f;
     return L(g_engine.mailbox.click_x[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_input_click_y]
-// ========================================
 EXPORT float vx_input_click_y(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return -1.0f;
     return L(g_engine.mailbox.click_y[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_input_is_captured]
-// ========================================
 EXPORT int vx_input_is_captured(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return L(g_engine.mailbox.mouse_captured[win_id]);
 }
 
-// ========================================
 // [FUNCTION: glfw_key_callback]
-// ========================================
 void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
@@ -395,17 +353,13 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, in
     }
 }
 
-// ========================================
 // [FUNCTION: vx_input_wasd]
-// ========================================
 EXPORT uint32_t vx_input_wasd(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return L(g_engine.mailbox.wasd_mask[win_id]);
 }
 
-// ========================================
 // [FUNCTION: vx_input_mouse_dx]
-// ========================================
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
@@ -416,9 +370,7 @@ EXPORT float vx_input_mouse_dx(int win_id) {
     return val;
 }
 
-// ========================================
 // [FUNCTION: vx_input_mouse_dy]
-// ========================================
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
@@ -429,17 +381,13 @@ EXPORT float vx_input_mouse_dy(int win_id) {
     return val;
 }
 
-// ========================================
 // [FUNCTION: vx_sys_resize_flag]
-// ========================================
 EXPORT int vx_sys_resize_flag(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return E_A(g_engine.mailbox.window_resized[win_id], 0);
 }
 
-// ========================================
 // [FUNCTION: vx_sys_window_size]
-// ========================================
 EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) {
         *w = 0; *h = 0;
@@ -449,9 +397,7 @@ EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
     *h = L(g_engine.mailbox.win_h[win_id]);
 }
 
-// ========================================
 // [FUNCTION: glfw_framebuffer_size_callback]
-// ========================================
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     if (width == 0 || height == 0) return;
 
@@ -466,18 +412,14 @@ void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     S(g_engine.mailbox.window_resized[id], 1);
 }
 
-// ========================================
 // [FUNCTION: vx_input_spacebar]
-// ========================================
 EXPORT int vx_input_spacebar(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return L(g_engine.mailbox.key_space[win_id]);
 }
 
 // --- VULKAN WSI & INITIALIZATION ---
-// ========================================
 // [FUNCTION: vulkan_debug_callback]
-// ========================================
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT messageSeverity,
     VkDebugUtilsMessageTypeFlagsEXT messageType,
@@ -493,9 +435,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     return VK_FALSE;
 }
 
-// ========================================
 // [FUNCTION: vx_sys_inject_validation]
-// ========================================
 EXPORT void vx_sys_inject_validation(void* instance_ptr) {
     VkInstance instance = (VkInstance)instance_ptr;
     VkDebugUtilsMessengerCreateInfoEXT createInfo = {0};
@@ -519,9 +459,7 @@ EXPORT void vx_sys_inject_validation(void* instance_ptr) {
     }
 }
 
-// ========================================
 // [FUNCTION: vx_sys_eject_validation]
-// ========================================
 EXPORT void vx_sys_eject_validation(void* instance) {
     PFN_vkDestroyDebugUtilsMessengerEXT destroyFn =
         (PFN_vkDestroyDebugUtilsMessengerEXT)vkGetInstanceProcAddr(
@@ -534,9 +472,7 @@ EXPORT void vx_sys_eject_validation(void* instance) {
     }
 }
 
-// ========================================
 // [FUNCTION: vx_stream_init]
-// ========================================
 EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
 
@@ -553,6 +489,7 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
     S(g_wsi_state[win_id], 1);
 }
 
+// [FUNCTION: vx_stream_allocate_tenant]
 EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t gfx_family, uint32_t transfer_family) {
     if (wid < 0 || wid >= MAX_WINDOWS || !wsi || !wsi->device) {
         printf("[C-ERROR] Failed to allocate tenant %d: Invalid WSI or Device.\n", wid);
@@ -602,9 +539,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t g
 }
 
 // --- ASYNC THREADS & BACKGROUND LOOPS ---
-// ========================================
 // [FUNCTION: vx_transfer_setup]
-// ========================================
 EXPORT void vx_transfer_setup(uint32_t q_family_index) {
     g_transfer_family_idx = q_family_index;
     for(int i = 0; i < TRANSFER_RING_SIZE; i++) {
@@ -612,9 +547,7 @@ EXPORT void vx_transfer_setup(uint32_t q_family_index) {
     }
 }
 
-// ========================================
 // [FUNCTION: vx_transfer_request]
-// ========================================
 EXPORT int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val) {
     for(int i = 0; i < TRANSFER_RING_SIZE; i++) {
         int expected = 0; // FREE
@@ -633,6 +566,7 @@ EXPORT int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64
     return 0; // Mailbox full, Lua must yield
 }
 
+// [FUNCTION: transfer_thread_loop]
 THREAD_FUNC transfer_thread_loop(void* arg) {
     printf("[C-CORE] Async Transfer Overlord Online.\n");
 
@@ -707,9 +641,7 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
     return NULL;
 }
 
-// ========================================
 // [FUNCTION: vx_stream_packet]
-// ========================================
 EXPORT RenderPacket* vx_stream_packet(int idx) {
     // [PATCH] Guard against -1 index requests from leaked locks
     if (idx < 0 || idx >= RING_SIZE) {
@@ -719,9 +651,7 @@ EXPORT RenderPacket* vx_stream_packet(int idx) {
     return &g_ring.packets[idx];
 }
 
-// ========================================
 // [FUNCTION: vx_stream_acquire]
-// ========================================
 EXPORT int vx_stream_acquire() {
     uint32_t mask = L(g_ring.locked_mask);
     int ready = L(g_ring.ready_idx);
@@ -737,9 +667,7 @@ EXPORT int vx_stream_acquire() {
     return -1;
 }
 
-// ========================================
 // [FUNCTION: vx_stream_commit]
-// ========================================
 EXPORT void vx_stream_commit(int idx) {
     // FORCE HARDWARE MEMORY FLUSH:
     // Guarantees all previous ffi.copy and pointer assignments from Lua
@@ -747,10 +675,7 @@ EXPORT void vx_stream_commit(int idx) {
     atomic_thread_fence(memory_order_release);
     S(g_ring.ready_idx, idx);
 }
-
-// ========================================
 // [FUNCTION: vx_record_commands]
-// ========================================
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand* queue, uint32_t count, RenderThreadInit* win_wsi) {
     VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     vkBeginCommandBuffer(cmd, &beginInfo);
@@ -897,6 +822,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
     vkEndCommandBuffer(cmd);
 }
 
+// [FUNCTION: render_thread_loop]
 THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
 
@@ -1003,9 +929,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
     return NULL;
 }
 
-// ========================================
 // [FUNCTION: vx_thread_start]
-// ========================================
 EXPORT void vx_thread_start() {
     S(g_render_thread_active, 1);
     S(g_transfer_thread_active, 1);
@@ -1014,9 +938,7 @@ EXPORT void vx_thread_start() {
 }
 
 // --- ENGINE LIFECYCLE & TEARDOWN ---
-// ========================================
 // [FUNCTION: lua_co_overlord_loop]
-// ========================================
 THREAD_FUNC lua_co_overlord_loop(void* arg) {
     printf("[LUA-OS-THREAD] Booting Lua VM...\n");
     lua_State* L = luaL_newstate();
@@ -1032,6 +954,7 @@ THREAD_FUNC lua_co_overlord_loop(void* arg) {
     return THREAD_RETURN_VAL;
 }
 
+// [FUNCTION: vx_thread_kill]
 EXPORT void vx_thread_kill() {
     S(g_render_thread_active, 0);
     S(g_transfer_thread_active, 0);
@@ -1062,6 +985,7 @@ EXPORT void vx_thread_kill() {
     printf("[C-CORE] Async Threads joined, Devices idled, Ring Purged, and Pools/Fences destroyed.\n");
 }
 
+// [FUNCTION: main]
 int main(int argc, char** argv) {
     printf("[C-CORE] Booting Weaver Engine Host...\n");
     if (!glfwInit()) {
