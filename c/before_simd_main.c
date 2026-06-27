@@ -4,7 +4,6 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdatomic.h>
-#include <immintrin.h> // Hardware pause intrinsic
 #include <stdalign.h>
 
 #define GLFW_INCLUDE_VULKAN
