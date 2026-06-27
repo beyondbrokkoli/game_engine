@@ -22,6 +22,10 @@ digraph WeaverEngine {
   "vulkan_core" -> "vulkan_headers";
   "vulkan_core" -> "registry_vk";
   "core_abi" -> "ffi";
+  "arena_manager" -> "ffi";
+  "arena_manager" -> "bit";
+  "arena_manager" -> "config_engine";
+  "arena_manager" -> "memory";
   "descriptors" -> "ffi";
   "descriptors" -> "bit";
   "descriptors" -> "registry_vk";
@@ -41,6 +45,7 @@ digraph WeaverEngine {
   "structs" -> "ffi";
   "structs" -> "config_net";
   "window_api" -> "ffi";
+  "config_engine" -> "bit";
   "sequence" -> "ffi";
   "sequence" -> "registry_vk";
   "sequence" -> "pipeline_manifest";
