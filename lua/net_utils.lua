@@ -91,6 +91,7 @@ local NetUtils = {}
 function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     print(string.format("[STUN] Querying external NAT edges at %s:%d...", cfg_net.STUN_SERVER, cfg_net.STUN_PORT))
     local stun_ok, my_pub_ip, my_pub_port = net.StunPunch(cfg_net.STUN_SERVER, cfg_net.STUN_PORT)
+
     if not stun_ok then
         print("[WARNING] STUN negotiation failed. Operating via local loopbacks.")
         my_pub_ip = my_local_ip
@@ -102,6 +103,7 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     print("\n[MATCHMAKING] Select Mode: (H)ost New Game or (J)oin Existing Lobby")
     io.write("> ")
     local mode_input = io.read("*l"):upper()
+
     local lobby_id = ""
     local session_token = nil
     local initial_payload = json_util.encode({
@@ -114,11 +116,13 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
         io.write("> ")
         local target_size = tonumber(io.read("*l")) or 2
         target_size = math.max(2, math.min(8, target_size))
+
         local host_payload = json_util.encode({
             public_ip = my_pub_ip, public_port = my_pub_port,
             local_ip = my_local_ip, local_port = local_port,
             target_size = target_size
         })
+
         print(string.format("[MATCHMAKER] Requesting new lobby for %d players...", target_size))
         local response = http_post(cfg_net.MATCHMAKER_URL .. "/host", host_payload)
         session_token = extract_true_64bit_token(response)
@@ -154,8 +158,7 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     local local_id = 0
     for i, p in ipairs(status_data.players) do
         if p.ip == my_pub_ip and tonumber(p.port) == my_pub_port and p.local_ip == my_local_ip and p.local_port == local_port then
-            local_id = i - 1
-            break
+            local_id = i - 1; break
         end
     end
 
@@ -165,6 +168,7 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
 
     local p2p_established = {}
     local active_peers = {}
+
     for i, p in ipairs(status_data.players) do
         local peer_id = i - 1
         if peer_id ~= local_id then
@@ -183,11 +187,15 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
 
     local real_time_remaining = status_data.start_time - status_data.server_time
     local sync_start_time = get_time_hires()
+
     if real_time_remaining > 0 then
         print(string.format("[ICE] Quorum locked. Initiating Mutual Handshake for %.2f seconds...", real_time_remaining))
-        local header_size = ffi.offsetof("LockstepPacket", "commands")
+
+        -- [!] REVERTED: Grab the full struct size to bypass NAT micro-packet drops
+        local full_packet_size = ffi.sizeof("LockstepPacket")
         local scratch_handshake = ffi.new("LockstepPacket")
         local handshake_buffer = ffi.new("RxPacket[32]")
+
         local p2p_heard = {}
 
         while (get_time_hires() - sync_start_time) < real_time_remaining do
@@ -197,14 +205,19 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
                     ping_pkt.session_token = session_token
                     ping_pkt.player_id = local_id
                     ping_pkt.frame_tick = p2p_heard[peer_id] and 1 or 0
-                    net.SendTo(ping_pkt, header_size, peer_id)
+
+                    -- [!] REVERTED: Blasting the full payload size
+                    net.SendTo(ping_pkt, full_packet_size, peer_id)
                 end
             end
 
             local count = net.RecvAll(handshake_buffer, 32)
             for i = 0, count - 1 do
                 local rx_pkt = handshake_buffer[i]
-                ffi.copy(scratch_handshake, rx_pkt.data, header_size)
+
+                -- [!] REVERTED: Safely copy only the bytes we actually received off the wire
+                ffi.copy(scratch_handshake, rx_pkt.data, rx_pkt.len)
+
                 if scratch_handshake.session_token == session_token then
                     local sender = scratch_handshake.player_id
                     p2p_heard[sender] = true
@@ -231,14 +244,17 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
 
     net.SetRelayIP(cfg_net.RELAY_IP)
     net.Connect(cfg_net.MAX_PLAYERS, cfg_net.RELAY_IP, cfg_net.RELAY_PORT)
+
     local reg_pkt = ffi.new("LockstepPacket")
     reg_pkt.session_token = session_token
     reg_pkt.player_id = local_id
     reg_pkt.frame_tick = 0
-    local header_size = ffi.offsetof("LockstepPacket", "commands")
-    net.SendTo(reg_pkt, header_size, cfg_net.MAX_PLAYERS)
-    print("[SYSTEM] All routes bound. Drop-in complete.")
 
+    -- [!] REVERTED: Ensure the relay receives a structurally complete packet
+    local full_packet_size = ffi.sizeof("LockstepPacket")
+    net.SendTo(reg_pkt, full_packet_size, cfg_net.MAX_PLAYERS)
+
+    print("[SYSTEM] All routes bound. Drop-in complete.")
     return session_token, local_id, p2p_established, active_peers, status_data
 end
 
