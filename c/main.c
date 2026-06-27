@@ -4,6 +4,7 @@
 #include <string.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <immintrin.h> // Hardware pause intrinsic
 #include <stdalign.h>
 
 #undef LOAD
@@ -231,7 +232,7 @@ void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     last_my[id] = ypos;
 
     // MULTI-TENANT SPINLOCK ACCUMULATION
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
 
     float current_dx = L_R(g_engine.mailbox.mouse_dx[id]);
     S_R(g_engine.mailbox.mouse_dx[id], current_dx + dx);
@@ -409,7 +410,7 @@ EXPORT uint32_t vx_input_wasd(int win_id) {
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
     float val = E_R(g_engine.mailbox.mouse_dx[win_id], 0.0f);
     CLR(s_mouse_lock);
 
@@ -422,7 +423,7 @@ EXPORT float vx_input_mouse_dx(int win_id) {
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
     float val = E_R(g_engine.mailbox.mouse_dy[win_id], 0.0f);
     CLR(s_mouse_lock);
 
@@ -1201,6 +1202,7 @@ int main(int argc, char** argv) {
 #include <string.h>
 #include <stdbool.h>
 #include <stdatomic.h>
+#include <immintrin.h> // Hardware pause intrinsic
 #include <stdalign.h>
 
 #undef LOAD
@@ -1428,7 +1430,7 @@ void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     last_my[id] = ypos;
 
     // MULTI-TENANT SPINLOCK ACCUMULATION
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
 
     float current_dx = L_R(g_engine.mailbox.mouse_dx[id]);
     S_R(g_engine.mailbox.mouse_dx[id], current_dx + dx);
@@ -1606,7 +1608,7 @@ EXPORT uint32_t vx_input_wasd(int win_id) {
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
     float val = E_R(g_engine.mailbox.mouse_dx[win_id], 0.0f);
     CLR(s_mouse_lock);
 
@@ -1619,7 +1621,7 @@ EXPORT float vx_input_mouse_dx(int win_id) {
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
 
-    while (TAS(s_mouse_lock));
+    while (TAS(s_mouse_lock)) { _mm_pause(); }
     float val = E_R(g_engine.mailbox.mouse_dy[win_id], 0.0f);
     CLR(s_mouse_lock);
 
