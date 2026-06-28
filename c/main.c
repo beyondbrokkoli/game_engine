@@ -115,6 +115,8 @@ typedef struct {
     uint64_t size;
     uint64_t timeline_sem;
     uint64_t signal_val;
+    int target_window_id;      // NEW: Tenant Binding
+    uint32_t _pad;             // Pad to 48 bytes total payload
     alignas(64) _Atomic int status;
 } TransferJob;
 
@@ -539,7 +541,11 @@ EXPORT void vx_transfer_setup(uint32_t q_family_index) {
     }
 }
 
-EXPORT int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val) {
+// UPDATED SIGNATURE: Now requires win_id
+EXPORT int vx_transfer_request(int win_id, uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val) {
+    // Zero-Trust Multiplexing Bounds Guard
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
+
     for(int i = 0; i < TRANSFER_RING_SIZE; i++) {
         int expected = 0;
         if (CXS(g_transfer_ring[i].status, expected, 1)) {
@@ -548,6 +554,7 @@ EXPORT int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64
             g_transfer_ring[i].size = size;
             g_transfer_ring[i].timeline_sem = t_sem;
             g_transfer_ring[i].signal_val = sig_val;
+            g_transfer_ring[i].target_window_id = win_id; // Bind the tenant!
             S(g_transfer_ring[i].status, 2);
             return 1;
         }
@@ -559,23 +566,28 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
     printf("[C-CORE] Async Transfer Overlord Online.\n");
     while (L(g_transfer_thread_active) && L(g_engine.mailbox.is_running)) {
         bool worked = false;
+
         for(int i = 0; i < TRANSFER_RING_SIZE; i++) {
             if (L(g_transfer_ring[i].status) == 2) {
                 TransferJob* job = &g_transfer_ring[i];
-                int wid = -1;
-                for (int w = 0; w < MAX_WINDOWS; w++) {
-                    if (L(g_wsi_state[w]) && g_window_wsi[w].device) {
-                        if (g_transfer_cmd_pools[w] != VK_NULL_HANDLE) {
-                            wid = w; break;
-                        }
-                    }
-                }
-                if (wid == -1) {
-                    SLEEP_MS(1);
+                int wid = job->target_window_id;
+
+                // --- DEFENSIVE GUARDS & ZERO-TRUST MULTIPLEXING ---
+                if (wid < 0 || wid >= MAX_WINDOWS || L(g_wsi_state[wid]) == 0) {
+                    // Tenant is dead or currently rebuilding WSI. Drop the job to prevent segfaults.
+                    S(job->status, 0);
                     continue;
                 }
 
                 RenderThreadInit* wsi = &g_window_wsi[wid];
+
+                // Double check the resources actually exist for this specific tenant
+                if (!wsi->device || g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
+                    S(job->status, 0);
+                    continue;
+                }
+                // --------------------------------------------------
+
                 VkCommandBuffer cmd = g_transfer_cmd_buffers[wid];
                 VkFence fence = g_transfer_fences[wid];
 
@@ -583,11 +595,12 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
                 PFN_vkResetFences pfnReset = (PFN_vkResetFences)wsi->vkResetFences;
                 PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)wsi->vkQueueSubmit;
 
+                // 2-Second GPU Hang Guard
                 VkResult res = pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
                 if (res == VK_TIMEOUT) {
-                    printf("[C-FATAL] Tenant %d: GPU Hang detected!\n", wid);
+                    printf("[C-FATAL] Tenant %d: GPU Transfer Hang detected!\n", wid);
                     S(job->status, 0);
-                    S(g_transfer_thread_active, 0);
+                    // Do not kill the whole thread, just break the inner attempt and let the main loop decide
                     break;
                 }
 
@@ -608,7 +621,7 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
                 vkEndCommandBuffer(cmd);
 
                 VkTimelineSemaphoreSubmitInfo timelineInfo = {
-                    .sType = 1000207003,
+                    .sType = 1000207003, // VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO
                     .signalSemaphoreValueCount = 1,
                     .pSignalSemaphoreValues = &job->signal_val
                 };
