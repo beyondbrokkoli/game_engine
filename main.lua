@@ -189,7 +189,7 @@ local function main()
     staging_ptr[48] = 0.0; staging_ptr[49] = 0.0; staging_ptr[50] = 1.0; staging_ptr[51] = 1.0
     staging_ptr[52] = 1.0; staging_ptr[53] = 0.0; staging_ptr[54] = 0.0; staging_ptr[55] = 1.0
 
-    local palette_job_id = memory.TransferAsync("PALETTE_STAGING", "PALETTE_HAVEN", 16384)
+    local palette_job_id = memory.TransferAsync(0, "PALETTE_STAGING", "PALETTE_HAVEN", 16384)
     local palette_ready = false
 
     local prev_mouse_left = false

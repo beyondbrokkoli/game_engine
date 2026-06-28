@@ -106,7 +106,7 @@ function Memory.InitTransferSubsystem(core_state)
     print("[MEMORY] Timeline Semaphore forged for Async Transfers.")
 end
 
-function Memory.TransferAsync(src_name, dst_name, byte_size)
+function Memory.TransferAsync(win_id, src_name, dst_name, byte_size)
     local src = Memory.Buffers[src_name]
     local dst = Memory.Buffers[dst_name]
     assert(src and dst, "FATAL: Invalid transfer buffers")
@@ -114,6 +114,7 @@ function Memory.TransferAsync(src_name, dst_name, byte_size)
     Memory.TimelineValue = Memory.TimelineValue + 1
 
     local success = ffi.C.vx_transfer_request(
+        win_id, -- [TRIFORCE PATCH] Explicitly route to a tenant's command pool
         ffi.cast("uint64_t", src),
         ffi.cast("uint64_t", dst),
         byte_size,
