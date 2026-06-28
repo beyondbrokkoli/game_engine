@@ -78,7 +78,60 @@ local function boot_weaver()
     end
     return boot_ctx
 end
+local function boot_secondary_tenant(vk_rt, win_id, width, height, frame_slots)
+    print(string.format("[UI BOOTSTRAP] Booting Secondary Tenant %d...", win_id))
+    WindowAPI.boot(win_id, width, height)
 
+    local surface = nil
+    while surface == nil do
+        surface = WindowAPI.get_surface(win_id)
+        sys_sleep(10)
+    end
+
+    local swapchain = require("swapchain")
+    local renderer = require("renderer")
+
+    local sc = swapchain.Init(vk_rt.vk, vk_rt, width, height, nil, surface)
+    local sync = renderer.InitSync(vk_rt.vk, vk_rt.device, frame_slots)
+
+    local wsi = ffi.new("RenderThreadInit")
+    wsi.device = vk_rt.device
+    wsi.queue = vk_rt.queue
+    wsi.transfer_queue = vk_rt.transferQueue
+    wsi.swapchain = sc.handle
+
+    for i = 0, sc.imageCount - 1 do
+        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
+        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
+    end
+    for i = 0, frame_slots - 1 do
+        wsi.image_available[i] = sync.imageAvailable[i]
+        wsi.render_finished[i] = sync.renderFinished[i]
+        wsi.in_flight[i]       = sync.inFlight[i]
+    end
+
+    local dev = vk_rt.device
+    local vk = vk_rt.vk
+    wsi.vkWaitForFences         = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
+    wsi.vkAcquireNextImageKHR   = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
+    wsi.vkResetFences           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
+    wsi.vkQueueSubmit           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
+    wsi.vkQueuePresentKHR       = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
+    wsi.pfnBegin                = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
+    wsi.pfnEnd                  = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
+    wsi.pfnSetCullMode          = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
+    wsi.pfnSetFrontFace         = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
+    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
+    wsi.pfnSetDepthTestEnable   = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
+    wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
+    wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
+
+    -- Allocate and start the stream for the new tenant
+    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex)
+    EngineAPI.init_stream(win_id, wsi)
+
+    return sc, sync
+end
 -- 5. THE MASTER ORCHESTRATOR
 local function main()
     print("Enter Node ID (0-7) OR Preferred Local Port (e.g., 50000): ")
