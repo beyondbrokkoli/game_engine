@@ -119,19 +119,39 @@ local function main()
 
     print("[LUA IO] Weaver sequence complete! Unpacking Context...")
     local vk_rt = engine_ctx.vk_runtime
-    local sc = engine_ctx.sc_state
-    local desc = engine_ctx.desc_state
-    local gfx = engine_ctx.gfx_state
-    local sync = engine_ctx.sync_state
+    local sc = engine_ctx.sc_state     -- ALERT: This is Tenant 0's Swapchain!
+    local desc = engine_ctx.desc_state -- Shared Descriptor State
+    local gfx = engine_ctx.gfx_state   -- Shared Graphics State
+    local sync = engine_ctx.sync_state -- ALERT: This is Tenant 0's Sync!
     local memory = require("memory")
 
-    -- [PHASE 1: MULTIPLEXER TENANT BOOT]
-    local editor_win_id = 1
-    local tenant_ctx_editor = { window_id = editor_win_id }
+    -- ====================================================================
+    -- [PHASE 1: MULTIPLEXER TENANT REGISTRY INITIATION]
+    -- ====================================================================
+    local TenantRegistry = require("tenant_registry")
+    local camera_mod = require("camera")
 
-    -- Boot the second WSI (Window, Swapchain, and Sync Primitives)
-    local editor_sc, editor_sync = boot_secondary_tenant(vk_rt, editor_win_id, 800, 600, cfg_gfx.cfg.frame_slots)
-    print("[LUA CO] Editor Tenant Mapped and Async Stream Allocated.")
+    -- 1. Adopt the Primary Tenant (Bootstrapped by Weaver Coroutine)
+    TenantRegistry.active[0] = {
+        win_id = 0,
+        suspended = false,
+        width = cfg_gfx.win.w,
+        height = cfg_gfx.win.h,
+        sc = sc,      -- Inherited directly from C-Core boot sequence
+        sync = sync,  -- Inherited directly from C-Core boot sequence
+        cam = camera_mod.new(),
+        pc = ffi.new("PushConstants"),
+        inv_vp = ffi.new("mat4_t")
+    }
+    TenantRegistry.active[0].pc.aos_current_idx = 0
+    TenantRegistry.active[0].pc.aos_prev_idx = 0
+    TenantRegistry.active[0].pc.dt = 0.0
+
+    -- 2. Boot the Secondary Editor Tenant dynamically
+    TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
+    print("[LUA CO] Multi-Tenant Registry Online.")
+
+    -- ====================================================================
 
     print("[LUA CO] Initializing VRAM Index Buffer with Strict Topology...")
     local index_ptr = ffi.cast("uint32_t*", memory.Mapped["MASTER_INDEX_BLOCK"])
@@ -143,32 +163,20 @@ local function main()
     ffi.copy(index_ptr, iso_indices, 36 * 4)
 
     local MAX_DRAW_COMMANDS = 1024
-    -- We double the allocation here because we are now pushing TWO packets per frame.
     local render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_gfx.cfg.frame_slots * 2)
     local frame_count = 0
 
-    -- [PHASE 1: DUAL CAMERA & STATE SEPARATION]
-    local pc_primary = ffi.new("PushConstants")
-    pc_primary.aos_current_idx, pc_primary.aos_prev_idx, pc_primary.dt = 0, 0, 0.0
-
-    local pc_editor = ffi.new("PushConstants")
-    pc_editor.aos_current_idx, pc_editor.aos_prev_idx, pc_editor.dt = 0, 0, 0.0
-
-    local camera_mod = require("camera")
-    local cam_primary = camera_mod.new()
-    local cam_editor = camera_mod.new()
-
-    local inv_vp_primary = ffi.new("mat4_t")
-    local inv_vp_editor = ffi.new("mat4_t")
+    -- [ANNIHILATED]: pc_primary, pc_editor, cam_primary, cam_editor, inv_vp_primary, inv_vp_editor. 
+    -- These are now securely encapsulated within TenantRegistry.active[win_id].
 
     local total_time = 0.0
     local wants_hotswap = false
     local master_ptr = ffi.cast("float*", memory.Mapped["MASTER_GPU_BLOCK"])
     local active_render_mode = cfg_gfx.mode.dual
 
-    local is_resizing = false
-    local last_resize_time = get_time_hires()
-    local RESIZE_COOLDOWN = 0.25
+    -- [ANNIHILATED]: Global is_resizing, last_resize_time, and RESIZE_COOLDOWN.
+    -- WSI OS Interrupt state is now evaluated natively per-tenant inside the Orchestrator loop.
+
     local TICK_RATE = cfg_net.TICK_RATE
     local FIXED_DT = 1.0 / TICK_RATE
 
@@ -202,7 +210,7 @@ local function main()
     local last_time = get_time_hires()
     local last_heartbeat = get_time_hires()
 
-    -- Rename your game state to `sim_ctx` to violently enforce the separation in your mind.
+    -- Rename the game state to `sim_ctx` to violently enforce the separation.
     local sim_ctx = ctx
 
     -- 6. THE DETERMINISTIC RENDER LOOP
