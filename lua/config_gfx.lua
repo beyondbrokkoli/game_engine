@@ -7,7 +7,7 @@ ConfigGfx.key = { space = 32, num1 = 49, num2 = 50, num3 = 51, esc = 256, f5 = 2
 
 -- [RESTORED] The exact table structure vulkan_core.lua expects
 ConfigGfx.cfg = {
-    use_validation = 0,
+    use_validation = 1,
     vk_api_version = 4206592,
     frame_slots = 10,
     pc_size = 96

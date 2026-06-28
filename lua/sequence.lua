@@ -35,10 +35,17 @@ local function step_4_memory_arenas(ctx)
     local grid_bytes = map_grid_cells * 16
     local gpu_bytes = math.floor(grid_bytes * 8 * 1.1)
 
-    memory.CreateHostVisibleBuffer("MASTER_GPU_BLOCK", "uint8_t", gpu_bytes, 416, ctx.vk_runtime)
-    memory.CreateHostVisibleBuffer("MASTER_INDEX_BLOCK", "uint32_t", map_grid_cells * 6, 320, ctx.vk_runtime)
+    -- FIX: TRANSFER_DST (2) | STORAGE_BUFFER (32) | VERTEX_BUFFER (128) = 162
+    memory.CreateHostVisibleBuffer("MASTER_GPU_BLOCK", "uint8_t", gpu_bytes, 162, ctx.vk_runtime)
+
+    -- FIX: TRANSFER_DST (2) | INDEX_BUFFER (64) = 66
+    memory.CreateHostVisibleBuffer("MASTER_INDEX_BLOCK", "uint32_t", map_grid_cells * 6, 66, ctx.vk_runtime)
+
+    -- TRANSFER_SRC (1) remains correct
     memory.CreateHostVisibleBuffer("PALETTE_STAGING", "float", 4096, 1, ctx.vk_runtime)
-    memory.CreateBufferHaven("PALETTE_HAVEN", 16384, 384, ctx.vk_runtime)
+
+    -- FIX: TRANSFER_DST (2) | STORAGE_BUFFER (32) = 34
+    memory.CreateBufferHaven("PALETTE_HAVEN", 16384, 34, ctx.vk_runtime)
 
     print("[WEAVER] Strict VRAM Mapping Complete.")
 end

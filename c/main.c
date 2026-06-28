@@ -829,11 +829,19 @@ THREAD_FUNC render_thread_loop(void* arg) {
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
         for (int w = 0; w < MAX_WINDOWS; w++) {
             int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, memory_order_acquire);
+
+            // --- THE WSI HANDSHAKE INTERCEPT ---
             if (cmd == CMD_REBUILD_WSI) {
                 RenderThreadInit* wsi = &g_window_wsi[w];
                 if (wsi->device) {
                     vkDeviceWaitIdle(wsi->device);
                 }
+
+                // FIX INJECTED: Suspend the tenant stream. The multiplexer will now bypass
+                // this window entirely, making it safe for Lua to destroy the Vulkan objects.
+                S(g_wsi_state[w], 0);
+
+                // Release the lock. Lua sees window_resized == 0 and begins the rebuild.
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].window_resized, 0, memory_order_release);
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, CMD_IDLE, memory_order_release);
             }
@@ -845,7 +853,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
             continue;
         }
 
-        // FIX 1: Advance sequentially to prevent skipping frames and leaking lock bits.
+        // Advance sequentially to prevent skipping frames and leaking lock bits.
         if (local_read == -1) {
             local_read = ready;
         } else {
@@ -860,6 +868,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
             continue;
         }
 
+        // Safe-Guard: If g_wsi_state is 0 (suspended for resize), drop the packet and continue.
         if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
             FA(g_ring.locked_mask, ~(1u << local_read));
             continue;
@@ -868,7 +877,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
         S(g_render_busy[wid], 1);
         RenderThreadInit* win_wsi = &g_window_wsi[wid];
 
-        // FIX 3: Clamp Lua's requested frame_slots to the C-side static allocation bounds (3)
+        // Clamp Lua's requested frame_slots to the C-side static allocation bounds (3)
         uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
         if (frame_slots > 3) frame_slots = 3;
 
