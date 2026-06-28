@@ -1,23 +1,11 @@
--- lua/vulkan_core.lua
 local ffi = require("ffi")
 local bit = require("bit")
 require("vulkan_headers")
 
 local reg = require("registry_vk")
+local EngineAPI = require("engine_api")
 local vk_struct = reg.vk_struct
 local vk_queue = reg.vk_queue
-
-ffi.cdef[[
-    const char** vx_sys_glfw_extensions(uint32_t* count);
-    void vx_sys_inject_validation(void* instance);
-    void vx_sys_eject_validation(void* instance);
-
-    typedef struct {
-        uint32_t sType;
-        void* pNext;
-        uint32_t timelineSemaphore;
-    } VkPhysicalDeviceTimelineSemaphoreFeatures;
-]]
 
 local vk
 local success, lib = pcall(ffi.load, "vulkan-1")
@@ -28,11 +16,10 @@ vk = lib
 
 local core = {}
 
--- [NEW] Pass gfx_cfg dynamically instead of pulling a global config
 function core.create_instance(req_extensions, gfx_cfg)
     print("[LUA] Initializing Vulkan Core (Instance Generation)...")
     local pCount = ffi.new("uint32_t[1]")
-    local glfwExtensions = ffi.C.vx_sys_glfw_extensions(pCount)
+    local glfwExtensions = EngineAPI.get_glfw_extensions(pCount)
     local exts_count = pCount[0]
     local total_exts = exts_count + #req_extensions
 
@@ -77,13 +64,11 @@ function core.create_instance(req_extensions, gfx_cfg)
     assert(vk.vkCreateInstance(createInfo, nil, pInstance) == 0, "FATAL: vkCreateInstance failed!")
 
     local instance = pInstance[0]
-    if gfx_cfg.use_validation == 1 then ffi.C.vx_sys_inject_validation(instance) end
+    if gfx_cfg.use_validation == 1 then EngineAPI.inject_validation(instance) end
 
     return { vk = vk, instance = instance }
 end
 
--- This function doesn't actually use gfx_cfg in the original code,
--- so its signature remains identical.
 function core.finalize_device_and_swapchain(vk_state, surface_ptr, req_extensions)
     print("[LUA] Resuming Vulkan Setup. Finalizing Logical Device...")
     local vk = vk_state.vk
@@ -108,11 +93,9 @@ function core.finalize_device_and_swapchain(vk_state, surface_ptr, req_extension
 
     for i = 0, pQueueFamilyCount[0] - 1 do
         local flags = queueFamilies[i].queueFlags
-        -- Find Graphics Queue
         if bit.band(flags, vk_queue.graphics) ~= 0 and qIndex == -1 then
             qIndex = i
         end
-        -- Find Dedicated Transfer Queue (Has Transfer, NO Graphics)
         if bit.band(flags, vk_queue.transfer) ~= 0 and bit.band(flags, vk_queue.graphics) == 0 then
             tIndex = i
         end
@@ -167,7 +150,7 @@ function core.finalize_device_and_swapchain(vk_state, surface_ptr, req_extension
 
     local timelineFeat = ffi.new("VkPhysicalDeviceTimelineSemaphoreFeatures")
     ffi.fill(timelineFeat, ffi.sizeof(timelineFeat))
-    timelineFeat.sType = 1000207000 -- VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_TIMELINE_SEMAPHORE_FEATURES
+    timelineFeat.sType = 1000207000 
     timelineFeat.timelineSemaphore = 1
     timelineFeat.pNext = extDynamicState2
 
@@ -205,14 +188,13 @@ function core.finalize_device_and_swapchain(vk_state, surface_ptr, req_extension
     return vk_state
 end
 
--- [NEW] Pass gfx_cfg dynamically so it knows whether to eject validation
 function core.Destroy(vk_state, gfx_cfg)
     print("[TEARDOWN] Shutting down Vulkan Core...")
     local vk = vk_state.vk
     if vk_state.device ~= nil then vk.vkDestroyDevice(vk_state.device, nil) end
     if vk_state.surface ~= nil then vk.vkDestroySurfaceKHR(vk_state.instance, vk_state.surface, nil) end
     if vk_state.instance ~= nil then
-        if gfx_cfg.use_validation == 1 then ffi.C.vx_sys_eject_validation(vk_state.instance) end
+        if gfx_cfg.use_validation == 1 then EngineAPI.eject_validation(vk_state.instance) end
         vk.vkDestroyInstance(vk_state.instance, nil)
     end
 end

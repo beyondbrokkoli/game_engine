@@ -111,7 +111,12 @@ local function step_10_overlord_handoff(ctx)
     wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
     wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
 
-    EngineAPI.setup_transfer(ctx.vk_runtime.tIndex)
+    -- [TRIFORCE PATCH]: Instruct C-core to allocate multiplexed command pools for this tenant
+    local gfx_family = ctx.vk_runtime.gIndex or 0
+    local transfer_family = ctx.vk_runtime.tIndex or 0
+    EngineAPI.allocate_tenant(ctx.win_id, wsi, gfx_family, transfer_family)
+
+    EngineAPI.setup_transfer(transfer_family)
     EngineAPI.init_stream(ctx.win_id, wsi)
     EngineAPI.start_thread()
     print("[WEAVER] Engine Initialization Complete. Async Overlord is LIVE.")

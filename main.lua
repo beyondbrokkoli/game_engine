@@ -35,7 +35,8 @@ local Pump = require("net_pump").init(app_ctx)
 local FSM = require("fsm_core").init(app_ctx, Game)
 
 local primary_win_id = 0
-local tenant_ctx = core_abi.create_tenant_context(primary_win_id)
+-- local tenant_ctx = core_abi.create_tenant_context(primary_win_id)
+local tenant_ctx = { window_id = primary_win_id }
 
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
@@ -304,7 +305,7 @@ local function main()
             total_time = total_time + frame_time
             pc.total_time = total_time
 
-            camera_mod.update(cam, frame_time, mouse_x, mouse_y, sc.extent.width, sc.extent.height)
+            camera_mod.update(cam, frame_time, mouse_x, mouse_y, sc.extent.width, sc.extent.height, primary_win_id)
             camera_mod.get_matrices(cam, sc.extent.width, sc.extent.height, pc.viewProj, inv_vp)
 
             local write_idx = EngineAPI.acquire_render_packet()

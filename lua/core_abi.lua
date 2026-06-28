@@ -53,6 +53,13 @@ int clock_gettime(int clk_id, timespec *tp);
 
 // Math / Structs
 typedef struct __attribute__((aligned(16))) { float x, y, z, w; } vec4_t;
+
+typedef struct {
+    uint32_t sType;
+    void* pNext;
+    uint32_t timelineSemaphore;
+} VkPhysicalDeviceTimelineSemaphoreFeatures;
+
 ]]
 
 return ffi.C
