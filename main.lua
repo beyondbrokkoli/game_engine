@@ -78,8 +78,14 @@ local function boot_weaver()
     end
     return boot_ctx
 end
+
 local function boot_secondary_tenant(vk_rt, win_id, width, height, frame_slots)
     print(string.format("[UI BOOTSTRAP] Booting Secondary Tenant %d...", win_id))
+
+    -- [TRIFORCE PATCH]: Publish the Vulkan Instance to the Multiplexer for this specific Tenant
+    EngineAPI.publish_instance(win_id, vk_rt.instance)
+
+    -- Now the C-Core has the instance and will safely generate the surface
     WindowAPI.boot(win_id, width, height)
 
     local surface = nil
@@ -132,6 +138,45 @@ local function boot_secondary_tenant(vk_rt, win_id, width, height, frame_slots)
 
     return sc, sync
 end
+
+local function rearm_secondary_wsi(vk_rt, sc, sync, win_id)
+    print(string.format("[LUA CO] Re-arming Tenant %d WSI after scorched-earth restart...", win_id))
+    local wsi = ffi.new("RenderThreadInit")
+    wsi.device = vk_rt.device
+    wsi.queue = vk_rt.queue
+    wsi.transfer_queue = vk_rt.transferQueue
+    wsi.swapchain = sc.handle
+
+    for i = 0, sc.imageCount - 1 do
+        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
+        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
+    end
+    for i = 0, 9 do -- Using absolute maximum bound (frame_slots)
+        wsi.image_available[i] = sync.imageAvailable[i]
+        wsi.render_finished[i] = sync.renderFinished[i]
+        wsi.in_flight[i]       = sync.inFlight[i]
+    end
+
+    local dev = vk_rt.device
+    local vk = vk_rt.vk
+    wsi.vkWaitForFences         = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
+    wsi.vkAcquireNextImageKHR   = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
+    wsi.vkResetFences           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
+    wsi.vkQueueSubmit           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
+    wsi.vkQueuePresentKHR       = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
+    wsi.pfnBegin                = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
+    wsi.pfnEnd                  = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
+    wsi.pfnSetCullMode          = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
+    wsi.pfnSetFrontFace         = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
+    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
+    wsi.pfnSetDepthTestEnable   = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
+    wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
+    wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
+
+    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex)
+    EngineAPI.init_stream(win_id, wsi)
+end
+
 -- 5. THE MASTER ORCHESTRATOR
 local function main()
     print("Enter Node ID (0-7) OR Preferred Local Port (e.g., 50000): ")
@@ -173,7 +218,7 @@ local function main()
         if not status then error("Fatal Weaver Crash: " .. tostring(engine_ctx)) end
     end
 
-print("[LUA IO] Weaver sequence complete! Unpacking Context...")
+    print("[LUA IO] Weaver sequence complete! Unpacking Context...")
     local vk_rt = engine_ctx.vk_runtime
     local sc = engine_ctx.sc_state
     local desc = engine_ctx.desc_state
@@ -183,12 +228,11 @@ print("[LUA IO] Weaver sequence complete! Unpacking Context...")
 
     -- [PHASE 1: MULTIPLEXER TENANT BOOT]
     local editor_win_id = 1
-    local tenant_ctx_editor = core_abi.create_tenant_context(editor_win_id)
+    local tenant_ctx_editor = { window_id = editor_win_id }
 
     -- Boot the second WSI (Window, Swapchain, and Sync Primitives)
     local editor_sc, editor_sync = boot_secondary_tenant(vk_rt, editor_win_id, 800, 600, cfg_gfx.cfg.frame_slots)
     print("[LUA CO] Editor Tenant Mapped and Async Stream Allocated.")
-    -- ====================================================================
 
     print("[LUA CO] Initializing VRAM Index Buffer with Strict Topology...")
     local index_ptr = ffi.cast("uint32_t*", memory.Mapped["MASTER_INDEX_BLOCK"])
@@ -355,7 +399,12 @@ print("[LUA IO] Weaver sequence complete! Unpacking Context...")
                     sc = new_ctx.sc_state
                     gfx = new_ctx.gfx_state
                     sync = new_ctx.sync_state
+
+                    -- [TENANT 0 RE-ARM]: Rebuilds the primary tenant and wakes up the C-Core threads
                     seq.boot[10].action(new_ctx)
+
+                    -- [TENANT 1 RE-ARM]: Re-allocates Editor WSI memory wiped by EngineAPI.kill_thread()
+                    rearm_secondary_wsi(vk_rt, editor_sc, editor_sync, editor_win_id)
 
                     print("[LUA CO] Mini-Weaver Rebuild Complete.\n")
                     is_resizing = false
