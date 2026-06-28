@@ -309,10 +309,13 @@ local function main()
                     swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
                     -- B. Reconstruct the Holy Trinity (Swapchain, Depth Buffer, Sync)
-                    local manifest = require("pipeline_manifest") -- FIX INJECTED: Source the manifest
+                    local manifest = require("pipeline_manifest")
 
                     tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
-                    gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
+
+                    -- FIX: Explicitly assign the rebuilt state to the specific tenant!
+                    tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
+
                     tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, cfg_gfx.cfg.frame_slots)
 
                     -- C. Safely reconstruct the RenderThreadInit struct for the C-Core

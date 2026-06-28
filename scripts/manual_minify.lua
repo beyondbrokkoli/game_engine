@@ -82,7 +82,7 @@ local order = {
     -- 1. C-CORE & HEADERS (Absolute Foundation)
     "c/shared_structs.h",
 --    "c/vx_net.c",
-    "c/main.c",
+--    "c/main.c",
 
     -- 2. GLSL SHADERS & SSOT
 --    "glsl/shared.glsl",
@@ -93,7 +93,7 @@ local order = {
     -- 3. LUA LEAVES (Zero Dependencies)
     -- Configs, low-level math, ABIs, headers
 --    "lua/config_net.lua",
-    "lua/config_sim.lua",
+--    "lua/config_sim.lua",
     "lua/config_gfx.lua",
 --    "lua/fixed_math.lua",
 --    "lua/vmath.lua",
