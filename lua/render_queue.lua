@@ -67,7 +67,7 @@ local function pure_pack_frame(tenant_ctx, write_idx, pc, rts_grid, vram_templat
 
     -- [TRIFORCE PATCH]: Acquire packet via API and inject tenant routing ID
     local packet = EngineAPI.get_render_packet(write_idx)
-    packet.target_window_id = tenant_ctx.window_id
+    packet.target_window_id = tenant_ctx.win_id
 
     local MAX_DRAW_COMMANDS = 1024
     local current_queue_ptr = render_queues + (write_idx * MAX_DRAW_COMMANDS)

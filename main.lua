@@ -163,7 +163,12 @@ local function main()
     ffi.copy(index_ptr, iso_indices, 36 * 4)
 
     local MAX_DRAW_COMMANDS = 1024
-    local render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_gfx.cfg.frame_slots * 2)
+
+    -- [ARMOR PATCH]: Anchor to sim_ctx to survive GC, and size by RING_SIZE (4)
+    -- to prevent out-of-bounds pointer arithmetic when write_idx hits 3.
+    sim_ctx.render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_net.RING_SIZE * 2)
+    local render_queues = sim_ctx.render_queues
+
     local frame_count = 0
 
     -- [ANNIHILATED]: pc_primary, pc_editor, cam_primary, cam_editor, inv_vp_primary, inv_vp_editor.
@@ -319,7 +324,7 @@ local function main()
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
     require("swapchain").Destroy(vk_rt.vk, vk_rt, sc)
-    require("renderer").Destroy(vk_rt.vk, vk_rt.device, sync, cfg_gfx.cfg.frame_slots)
+    require("renderer").Destroy(vk_rt.vk, vk_rt.device, sync)
 
     memory.DestroyBuffer("MASTER_GPU_BLOCK", vk_rt)
     memory.DestroyBuffer("MASTER_INDEX_BLOCK", vk_rt)
