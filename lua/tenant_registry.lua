@@ -41,19 +41,31 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
 
     -- [ARMOR PATCH]: Map all padded handles (safe_frames) across the FFI boundary
     -- so the C-Core % 3 hardcode doesn't read a NULL pointer on frame index 2.
-    local safe_slots = sync.safe_frames or frame_slots
+    local safe_slots = sync.safe_frames or frame_slots;
     for i = 0, safe_slots - 1 do
-        wsi.image_available[i] = sync.imageAvailable[i]
-        wsi.render_finished[i] = sync.renderFinished[i]
-        wsi.in_flight[i]       = sync.inFlight[i]
+        wsi.image_available[i] = sync.imageAvailable[i];
+        wsi.render_finished[i] = sync.renderFinished[i];
+        wsi.in_flight[i] = sync.inFlight[i];
     end
 
-    -- Hook up Vulkan function pointers (omitted for brevity, keep your existing pfn hooks here)
-    -- ... wsi.pfnBegin = ...
+    -- FIX INJECTED: Populate required Dynamic Rendering and Sync function pointers
+    local vk, dev = vk_rt.vk, vk_rt.device
+    wsi.vkWaitForFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
+    wsi.vkAcquireNextImageKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
+    wsi.vkResetFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
+    wsi.vkQueueSubmit = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
+    wsi.vkQueuePresentKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
+    wsi.pfnBegin = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
+    wsi.pfnEnd = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
+    wsi.pfnSetCullMode = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
+    wsi.pfnSetFrontFace = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
+    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
+    wsi.pfnSetDepthTestEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
+    wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
+    wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
 
-    -- 3. Lock it into the C-Core Multiplexer
-    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex)
-    EngineAPI.init_stream(win_id, wsi)
+    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex);
+    EngineAPI.init_stream(win_id, wsi);
 
     -- 4. Construct the Isolated Lua Tenant Struct
     local tenant = {

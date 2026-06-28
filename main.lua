@@ -272,12 +272,43 @@ local function main()
                 if new_w > 0 and new_h > 0 then
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
-
-                    -- WSI rebuild requires updating the swapchain struct pointers
                     require("swapchain").Destroy(vk_rt.vk, vk_rt, tenant.sc)
                     tenant.sc = swapchain.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
-                    -- Trigger C-Core re-arm (similar to your rearm_secondary_wsi, but streamlined)
-                    EngineAPI.init_stream(win_id, tenant.sc.handle)
+
+                    -- FIX INJECTED: Safely reconstruct the RenderThreadInit struct for the C-Core
+                    local wsi = ffi.new("RenderThreadInit")
+                    wsi.device = vk_rt.device
+                    wsi.queue = vk_rt.queue
+                    wsi.transfer_queue = vk_rt.transferQueue
+                    wsi.swapchain = tenant.sc.handle
+                    wsi.max_frames_in_flight = tenant.sync.safe_frames
+
+                    for i = 0, tenant.sc.imageCount - 1 do
+                        wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
+                        wsi.swapchain_views[i] = ffi.cast("uint64_t", tenant.sc.imageViews[i])
+                    end
+                    for i = 0, tenant.sync.safe_frames - 1 do
+                        wsi.image_available[i] = tenant.sync.imageAvailable[i]
+                        wsi.render_finished[i] = tenant.sync.renderFinished[i]
+                        wsi.in_flight[i] = tenant.sync.inFlight[i]
+                    end
+
+                    local vk, dev = vk_rt.vk, vk_rt.device
+                    wsi.vkWaitForFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
+                    wsi.vkAcquireNextImageKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
+                    wsi.vkResetFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
+                    wsi.vkQueueSubmit = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
+                    wsi.vkQueuePresentKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
+                    wsi.pfnBegin = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
+                    wsi.pfnEnd = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
+                    wsi.pfnSetCullMode = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
+                    wsi.pfnSetFrontFace = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
+                    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
+                    wsi.pfnSetDepthTestEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
+                    wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
+                    wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
+
+                    EngineAPI.init_stream(win_id, wsi)
                 end
                 goto continue_tenant
             end
