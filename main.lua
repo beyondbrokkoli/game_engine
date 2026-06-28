@@ -258,28 +258,42 @@ local function main()
 
         for win_id, tenant in pairs(TenantRegistry.active) do
 
-            -- 1. Phase 2 WSI State Machine (OS Resize Interrupts)
-            if WindowAPI.get_resize_state(win_id) then
-                if not tenant.suspended then
-                    WindowAPI.trigger_wsi_rebuild(win_id)
-                    tenant.suspended = true
-                end
+            -- 1. Trigger the WSI Rebuild command and suspend Lua tracking
+            if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
+                WindowAPI.trigger_wsi_rebuild(win_id)
+                tenant.suspended = true
                 goto continue_tenant
             end
 
-
+            -- 2. The Asynchronous Handshake
             if tenant.suspended then
+                -- Wait! Do NOT destroy anything until the C-Core acknowledges the command.
+                -- The C-core sets resize_state to 0 ONLY after vkDeviceWaitIdle is complete.
+                if WindowAPI.get_resize_state(win_id) then
+                    goto continue_tenant
+                end
+
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
                 if new_w > 0 and new_h > 0 then
+                    print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
 
-                    -- FIX: Cache the required module into a local variable
                     local swapchain_mod = require("swapchain")
-                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
-                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
+                    local graphics_mod = require("graphics_pipeline")
+                    local renderer_mod = require("renderer")
 
-                    -- Safely reconstruct the RenderThreadInit struct for the C-Core
+                    -- A. Safe Teardown (Order matters)
+                    graphics_mod.Destroy(vk_rt.vk, vk_rt, gfx)
+                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
+                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+
+                    -- B. Reconstruct the Holy Trinity (Swapchain, Depth Buffer, Sync)
+                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
+                    gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
+                    tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, cfg_gfx.cfg.frame_slots)
+
+                    -- C. Safely reconstruct the RenderThreadInit struct for the C-Core
                     local wsi = ffi.new("RenderThreadInit")
                     wsi.device = vk_rt.device
                     wsi.queue = vk_rt.queue
@@ -312,7 +326,9 @@ local function main()
                     wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
                     wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
 
-                    EngineAPI.init_stream(win_id, wsi)
+                    -- Resume multiplexer streaming
+                    EngineAPI.init_stream(win_id, wsi);
+                    print(string.format("[LUA CO] Tenant %d: WSI Stream Resumed.", win_id))
                 end
                 goto continue_tenant
             end
