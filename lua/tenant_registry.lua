@@ -35,7 +35,11 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
         wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
         wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
     end
-    for i = 0, frame_slots - 1 do
+
+    -- [ARMOR PATCH]: Map all padded handles (safe_frames) across the FFI boundary
+    -- so the C-Core % 3 hardcode doesn't read a NULL pointer on frame index 2.
+    local safe_slots = sync.safe_frames or frame_slots
+    for i = 0, safe_slots - 1 do
         wsi.image_available[i] = sync.imageAvailable[i]
         wsi.render_finished[i] = sync.renderFinished[i]
         wsi.in_flight[i]       = sync.inFlight[i]
