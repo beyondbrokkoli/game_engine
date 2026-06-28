@@ -5,7 +5,7 @@ ffi.cdef[[
 void vx_sys_publish_instance(int win_id, void* instance);
 void vx_sys_set_cmd(int win_id, int cmd, int w, int h);
 void* vx_sys_get_surface(int win_id);
-int vx_sys_resize_flag(int win_id);
+int vx_sys_get_resize_state(int win_id);
 void vx_sys_window_size(int win_id, int* w, int* h);
 
 int vx_input_last_key(int win_id);
@@ -31,7 +31,7 @@ void vx_thread_kill();
 void vx_stream_init(int win_id, void* wsi);
 void vx_thread_start();
 void vx_transfer_setup(uint32_t q_family_index);
-int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val);
+int vx_transfer_request(int win_id, uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val);
 
 // --- NEW VULKAN MULTI-TENANT & VALIDATION API ---
 void vx_stream_allocate_tenant(int wid, void* wsi, uint32_t gfx_family, uint32_t transfer_family);

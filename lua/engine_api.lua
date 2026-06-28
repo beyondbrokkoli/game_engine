@@ -47,8 +47,8 @@ function EngineAPI.setup_transfer(q_family_index)
     ffi.C.vx_transfer_setup(q_family_index)
 end
 
-function EngineAPI.request_transfer(src, dst, size, t_sem, sig_val)
-    return ffi.C.vx_transfer_request(src, dst, size, t_sem, sig_val)
+function EngineAPI.request_transfer(win_id, src, dst, size, t_sem, sig_val)
+    return ffi.C.vx_transfer_request(win_id, src, dst, size, t_sem, sig_val)
 end
 
 -- --- MULTI-TENANT & ORCHESTRATION EXTENSIONS ---
