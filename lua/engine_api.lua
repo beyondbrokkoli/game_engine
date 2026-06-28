@@ -57,9 +57,9 @@ function EngineAPI.allocate_tenant(win_id, wsi_ptr, gfx_family, transfer_family)
     ffi.C.vx_stream_allocate_tenant(win_id, wsi_ptr, gfx_family, transfer_family)
 end
 
-function EngineAPI.record_commands(cmd_ptr, packet_ptr, queue_ptr, count, wsi_ptr)
-    ffi.C.vx_record_commands(cmd_ptr, packet_ptr, queue_ptr, count, wsi_ptr)
-end
+-- function EngineAPI.record_commands(cmd_ptr, packet_ptr, queue_ptr, count, wsi_ptr)
+    -- ffi.C.vx_record_commands(cmd_ptr, packet_ptr, queue_ptr, count, wsi_ptr)
+-- end
 
 function EngineAPI.get_glfw_extensions(count_ptr)
     return ffi.C.vx_sys_glfw_extensions(count_ptr)

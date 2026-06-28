@@ -1,4 +1,3 @@
--- lua/swapchain.lua
 local ffi = require("ffi")
 local reg = require("registry_vk")
 local vk_struct, vk_format, vk_image = reg.vk_struct, reg.vk_format, reg.vk_image
@@ -8,7 +7,7 @@ local Swapchain = {}
 
 function Swapchain.Init(vk, core_state, width, height, old_swapchain, explicit_surface)
     print("[SWAPCHAIN] Building the display chain...")
-
+    -- [TRIFORCE PATCH]: Route to the specific tenant's surface
     local surface = explicit_surface or core_state.surface
 
     local surfaceCaps = ffi.new("VkSurfaceCapabilitiesKHR")
@@ -52,7 +51,6 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain, explicit_s
         print("[SWAPCHAIN WARNING] Surface volatile. Retrying next frame...")
         return nil
     end
-
     assert(res == vk_result.success, "FATAL: Failed to create Swapchain! Error: " .. tonumber(res))
     local swapchain = pSwapchain[0]
 
@@ -64,9 +62,11 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain, explicit_s
     vk.vkGetSwapchainImagesKHR(core_state.device, swapchain, pImageCount, images)
 
     local imageViews = ffi.new("VkImageView[?]", imageCount)
+
     for i = 0, imageCount - 1 do
         local viewInfo = ffi.new("VkImageViewCreateInfo")
         ffi.fill(viewInfo, ffi.sizeof(viewInfo))
+
         viewInfo.sType = vk_struct.image_view_create
         viewInfo.image = images[i]
         viewInfo.viewType = vk_image.view_type_2d
@@ -74,6 +74,7 @@ function Swapchain.Init(vk, core_state, width, height, old_swapchain, explicit_s
         viewInfo.subresourceRange.aspectMask = vk_image.aspect_color
         viewInfo.subresourceRange.levelCount = 1
         viewInfo.subresourceRange.layerCount = 1
+
         assert(vk.vkCreateImageView(core_state.device, viewInfo, nil, imageViews + i) == vk_result.success)
     end
 
