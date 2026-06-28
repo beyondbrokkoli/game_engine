@@ -999,10 +999,17 @@ THREAD_FUNC lua_co_overlord_loop(void* arg) {
 EXPORT void vx_thread_kill() {
     S(g_render_thread_active, 0);
     S(g_transfer_thread_active, 0);
+
     vmath_thread_join(g_render_thread);
     vmath_thread_join(g_transfer_thread);
-    S(g_ring.ready_idx, -1);
+
+    // FIX INJECTED: Iterate through the AoS array to reset all tenant read pointers
+    for (int i = 0; i < MAX_WINDOWS; i++) {
+        S(g_ring.ready_idx[i], -1);
+    }
+
     S(g_ring.locked_mask, 0);
+
     for (int i = 0; i < MAX_WINDOWS; i++) {
         if (g_window_wsi[i].device) {
             vkDeviceWaitIdle(g_window_wsi[i].device);
