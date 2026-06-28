@@ -126,11 +126,14 @@ local function main()
 
     print("[LUA IO] Weaver sequence complete! Unpacking Context...")
     local vk_rt = engine_ctx.vk_runtime
-    local sc = engine_ctx.sc_state     -- ALERT: This is Tenant 0's Swapchain!
-    local desc = engine_ctx.desc_state -- Shared Descriptor State
-    local gfx = engine_ctx.gfx_state   -- Shared Graphics State
-    local sync = engine_ctx.sync_state -- ALERT: This is Tenant 0's Sync!
+    local sc = engine_ctx.sc_state
+    local desc = engine_ctx.desc_state
+    local gfx = engine_ctx.gfx_state   -- <--- This is Tenant 0's Graphics State!
+    local sync = engine_ctx.sync_state
     local memory = require("memory")
+
+    local graphics_mod = require("graphics_pipeline")
+    local manifest = require("pipeline_manifest")
 
     -- [PHASE 1: MULTIPLEXER TENANT REGISTRY INITIATION]
     local TenantRegistry = require("tenant_registry")
@@ -142,8 +145,12 @@ local function main()
         suspended = false,
         width = cfg_gfx.win.w,
         height = cfg_gfx.win.h,
-        sc = sc,      -- Inherited directly from C-Core boot sequence
-        sync = sync,  -- Inherited directly from C-Core boot sequence
+        sc = sc,
+        sync = sync,
+
+        -- FIX INJECTED: You missed this line! Hand Tenant 0 its depth buffer.
+        gfx = gfx,
+
         cam = camera_mod.new(),
         pc = ffi.new("PushConstants"),
         inv_vp = ffi.new("mat4_t")
