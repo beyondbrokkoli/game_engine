@@ -267,15 +267,19 @@ local function main()
                 goto continue_tenant
             end
 
+
             if tenant.suspended then
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
                 if new_w > 0 and new_h > 0 then
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
-                    require("swapchain").Destroy(vk_rt.vk, vk_rt, tenant.sc)
-                    tenant.sc = swapchain.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
 
-                    -- FIX INJECTED: Safely reconstruct the RenderThreadInit struct for the C-Core
+                    -- FIX: Cache the required module into a local variable
+                    local swapchain_mod = require("swapchain")
+                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
+
+                    -- Safely reconstruct the RenderThreadInit struct for the C-Core
                     local wsi = ffi.new("RenderThreadInit")
                     wsi.device = vk_rt.device
                     wsi.queue = vk_rt.queue
