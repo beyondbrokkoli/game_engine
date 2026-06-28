@@ -7,16 +7,16 @@ function EngineAPI.is_running()
     return ffi.C.vx_core_is_running() == 1
 end
 
-function EngineAPI.acquire_render_packet()
-    return ffi.C.vx_stream_acquire()
+function EngineAPI.acquire_render_packet(win_id)
+    return ffi.C.vx_stream_acquire(win_id)
+end
+
+function EngineAPI.commit_render_packet(win_id, idx)
+    ffi.C.vx_stream_commit(win_id, idx)
 end
 
 function EngineAPI.get_render_packet(idx)
     return ffi.cast("RenderPacket*", ffi.C.vx_stream_packet(idx))
-end
-
-function EngineAPI.commit_render_packet(idx)
-    ffi.C.vx_stream_commit(idx)
 end
 
 function EngineAPI.publish_instance(win_id, instance_ptr)

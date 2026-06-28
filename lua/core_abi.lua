@@ -24,9 +24,11 @@ int vx_input_spacebar(int win_id);
 int vx_core_is_running();
 void vx_core_shutdown();
 void vx_core_mark_finished();
-int vx_stream_acquire();
+
+int vx_stream_acquire(int win_id);
 void* vx_stream_packet(int idx);
-void vx_stream_commit(int idx);
+void vx_stream_commit(int win_id, int idx);
+
 void vx_thread_kill();
 void vx_stream_init(int win_id, void* wsi);
 void vx_thread_start();

@@ -344,22 +344,22 @@ local function main()
 
             camera_mod.get_matrices(tenant.cam, tenant.width, tenant.height, tenant.pc.viewProj, tenant.inv_vp)
 
-            -- 3. Zero-Trust Ring Buffer Handshake
-            local write_idx = EngineAPI.acquire_render_packet()
+            -- Pass the win_id to strictly acquire from this tenant's partitioned 4-slot chunk
+            local write_idx = EngineAPI.acquire_render_packet(win_id)
             if write_idx == -1 then
                 goto continue_tenant
             end
 
-            -- 4. Pack & Commit
             tenant.pc.total_time = total_time
             tenant.pc.dt = sim_ctx.accumulator / FIXED_DT
 
-            -- Passing the specific `tenant` object handles isolation natively.
+            -- FIX APPLIED: Using 'tenant.gfx' to prevent Depth Buffer collision!
             render_queue.PackFrame(tenant, write_idx, tenant.pc, sim_ctx.rts_grid, vram_template,
-                                   render_queues, active_render_mode, master_ptr, memory,
-                                   gfx, desc, tenant.sc, sim_ctx.total_tiles, sim_ctx.net_identity)
+                render_queues, active_render_mode, master_ptr, memory,
+                tenant.gfx, desc, tenant.sc, sim_ctx.total_tiles, sim_ctx.net_identity)
 
-            EngineAPI.commit_render_packet(write_idx)
+            -- Commit back to this specific tenant's queue
+            EngineAPI.commit_render_packet(win_id, write_idx)
 
             ::continue_tenant::
         end
