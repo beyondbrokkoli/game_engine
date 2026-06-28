@@ -56,11 +56,11 @@ typedef pthread_t vmath_thread_t;
 #define CMD_IDLE 0
 #define CMD_BOOT_WINDOW 1
 #define CMD_KILL_WINDOW 2
-#define CMD_REBUILD_WSI 3 // ADDED: Phase 2 WSI Contract
+#define CMD_REBUILD_WSI 3
 
 #define MAX_WINDOWS 4
-#define RING_SIZE 4
-#define TRANSFER_RING_SIZE 4
+#define RING_SIZE 16          // EXPANDED: 16 total slots
+#define TRANSFER_RING_SIZE 16 // EXPANDED: 16 total slots
 
 // 1. Array of Structures (AoS) Tenant Layout
 typedef struct {
@@ -848,14 +848,17 @@ THREAD_FUNC render_thread_loop(void* arg) {
         }
 
         int ready = L(g_ring.ready_idx);
+
+        // If Lua hasn't committed anything yet, or we've caught up to the latest packet
         if (ready == -1 || ready == local_read) {
             SLEEP_MS(1);
             continue;
         }
 
-        // Advance sequentially to prevent skipping frames and leaking lock bits.
+        // FIX 1: Enforce strict sequential reads. Never jump to ready_idx.
+        // Since Lua always starts at slot 0, the C-Core must also start at 0.
         if (local_read == -1) {
-            local_read = ready;
+            local_read = 0;
         } else {
             local_read = (local_read + 1) % RING_SIZE;
         }

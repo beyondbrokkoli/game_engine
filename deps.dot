@@ -64,6 +64,12 @@ digraph WeaverEngine {
   "structs" -> "config_net";
   "json_util" -> "dkjson";
   "config_engine" -> "bit";
+  "tenant_registry" -> "ffi";
+  "tenant_registry" -> "window_api";
+  "tenant_registry" -> "engine_api";
+  "tenant_registry" -> "swapchain";
+  "tenant_registry" -> "renderer";
+  "tenant_registry" -> "camera";
   "swapchain" -> "ffi";
   "swapchain" -> "registry_vk";
   "render_queue" -> "ffi";
