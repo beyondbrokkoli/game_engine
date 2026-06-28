@@ -106,7 +106,8 @@ typedef struct {
 typedef struct {
     alignas(64) RenderPacket packets[RING_SIZE];
     alignas(64) _Atomic int ready_idx[MAX_WINDOWS];
-    alignas(64) _Atomic int local_read[MAX_WINDOWS];   // PROMOTED FROM RENDER THREAD LOCAL
+    alignas(64) _Atomic int local_read[MAX_WINDOWS];
+    alignas(64) int active_ring_slots[MAX_WINDOWS][10]; // NEW: PROMOTED FROM LOCAL
     alignas(64) _Atomic uint32_t locked_mask;
 } RenderRing;
 
@@ -132,10 +133,16 @@ bool first_mouse[MAX_WINDOWS] = {true, true, true, true};
 static atomic_flag s_mouse_lock = ATOMIC_FLAG_INIT;
 VkDebugUtilsMessengerEXT g_debugMessenger = VK_NULL_HANDLE;
 
-// FIX INJECTED: Initialize all 4 read pointers to -1
+// FIX INJECTED: Initialize all pointers and caches
 static RenderRing g_ring = {
     .ready_idx = {-1, -1, -1, -1},
-    .local_read = {-1, -1, -1, -1}, // NEW
+    .local_read = {-1, -1, -1, -1},
+    .active_ring_slots = {
+        {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
+        {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
+        {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1},
+        {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1}
+    },
     .locked_mask = 0
 };
 
@@ -497,7 +504,7 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
 
     // --- CRITICAL FIX: Reset Ring Buffer State for Resumed Tenant ---
     int offset = win_id * 4;
-    uint32_t tenant_mask = 0xFu << offset; // 4 bits per tenant
+    uint32_t tenant_mask = 0xFu << offset;
 
     // 1. Force-unlock all 4 slots for this tenant to prevent deadlock
     FA(g_ring.locked_mask, ~tenant_mask);
@@ -507,6 +514,11 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
 
     // 3. Reset read pointer so C-Core doesn't process stale pre-resize packets
     S(g_ring.local_read[win_id], -1);
+
+    // 4. Wipe the global active slot cache for this tenant
+    for (int f = 0; f < 10; f++) {
+        g_ring.active_ring_slots[win_id][f] = -1;
+    }
 
     S(g_wsi_state[win_id], 1);
 }
@@ -853,14 +865,6 @@ THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
     uint32_t t_frame[MAX_WINDOWS] = {0};
 
-    int active_ring_slots[MAX_WINDOWS][10];
-    for (int wid = 0; wid < MAX_WINDOWS; wid++) {
-        for (int f = 0; f < 10; f++) active_ring_slots[wid][f] = -1;
-    }
-
-    // REMOVE THIS LINE:
-    // int local_read[MAX_WINDOWS] = {-1, -1, -1, -1};
-
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
 
         // 1. Process Window OS Commands
@@ -932,11 +936,12 @@ THREAD_FUNC render_thread_loop(void* arg) {
                 break;
             }
 
-            int finished_slot = active_ring_slots[wid][current_frame];
+            // --- USE GLOBAL CACHE INSTEAD OF LOCAL ---
+            int finished_slot = g_ring.active_ring_slots[wid][current_frame];
             if (finished_slot != -1 && finished_slot != read_idx) {
                 FA(g_ring.locked_mask, ~(1u << finished_slot));
             }
-            active_ring_slots[wid][current_frame] = read_idx;
+            g_ring.active_ring_slots[wid][current_frame] = read_idx;
 
             PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
             uint32_t img_idx;
