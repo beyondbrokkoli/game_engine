@@ -632,6 +632,11 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
                 };
 
                 pfnSubmit(wsi->transfer_queue, 1, &submitInfo, fence);
+
+                // FIX 4: Block the internal transfer thread until the DMA finishes.
+                // DO NOT release the job slot back to Lua until the GPU is done reading.
+                pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
+
                 S(job->status, 0);
                 worked = true;
             }
@@ -751,7 +756,11 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
         uint64_t current_pipeline = 0;
         uint64_t current_descriptor = 0;
 
-        for (uint32_t i = 0; i < count; i++) {
+        // FIX 2: Strict bounds constraint to armor against network state spike overruns
+        #define MAX_DRAW_COMMANDS 1024
+        uint32_t safe_count = count > MAX_DRAW_COMMANDS ? MAX_DRAW_COMMANDS : count;
+
+        for (uint32_t i = 0; i < safe_count; i++) {
             DrawCommand* draw = &queue[i];
 
             if (draw->pipeline_id != current_pipeline) {
@@ -810,7 +819,6 @@ THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
     uint32_t t_frame[MAX_WINDOWS] = {0};
 
-    // FIX INJECTED: Expand local state tracker to struct max limits (10 slots) to avoid OOB
     int active_ring_slots[MAX_WINDOWS][10];
     for (int wid = 0; wid < MAX_WINDOWS; wid++) {
         for (int f = 0; f < 10; f++) active_ring_slots[wid][f] = -1;
@@ -837,11 +845,16 @@ THREAD_FUNC render_thread_loop(void* arg) {
             continue;
         }
 
-        local_read = ready;
+        // FIX 1: Advance sequentially to prevent skipping frames and leaking lock bits.
+        if (local_read == -1) {
+            local_read = ready;
+        } else {
+            local_read = (local_read + 1) % RING_SIZE;
+        }
+
         RenderPacket* p = &g_ring.packets[local_read];
         int wid = p->target_window_id;
 
-        // FIX INJECTED: Core tenant bounds guard inside the lock-free multiplexer
         if (wid < 0 || wid >= MAX_WINDOWS) {
             FA(g_ring.locked_mask, ~(1u << local_read));
             continue;
@@ -855,11 +868,13 @@ THREAD_FUNC render_thread_loop(void* arg) {
         S(g_render_busy[wid], 1);
         RenderThreadInit* win_wsi = &g_window_wsi[wid];
 
-        // FIX INJECTED: Safe modulo bounds via dynamic track
+        // FIX 3: Clamp Lua's requested frame_slots to the C-side static allocation bounds (3)
         uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
-        uint32_t current_frame = t_frame[wid] % frame_slots;
+        if (frame_slots > 3) frame_slots = 3;
 
+        uint32_t current_frame = t_frame[wid] % frame_slots;
         VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
+
         PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
         VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
 
@@ -929,8 +944,6 @@ THREAD_FUNC render_thread_loop(void* arg) {
         pfnPresent(win_wsi->queue, &presentInfo);
 
         S(g_render_busy[wid], 0);
-
-        // FIX INJECTED: Clamped sync modulo
         t_frame[wid] = (current_frame + 1) % frame_slots;
     }
     printf("[C-CORE] Async Render Multiplexer gracefully terminated.\n");

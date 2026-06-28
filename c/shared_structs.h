@@ -24,6 +24,8 @@ typedef struct  {
     VkQueue queue;
     VkQueue transfer_queue;
     VkSwapchainKHR swapchain;
+    uint32_t max_frames_in_flight;
+    uint8_t _pad_auto_0[4];
     uint64_t swapchain_images[10];
     uint64_t swapchain_views[10];
     VkSemaphore image_available[10];
