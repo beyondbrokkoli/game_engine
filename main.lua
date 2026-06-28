@@ -33,10 +33,7 @@ local Raycast = require("raycast")
 local Game = require("game_state").init(app_ctx)
 local Pump = require("net_pump").init(app_ctx)
 local FSM = require("fsm_core").init(app_ctx, Game)
-
-local primary_win_id = 0
--- local tenant_ctx = core_abi.create_tenant_context(primary_win_id)
-local tenant_ctx = { window_id = primary_win_id }
+local TenantRegistry = require("tenant_registry")
 
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
@@ -77,104 +74,6 @@ local function boot_weaver()
         end
     end
     return boot_ctx
-end
-
-local function boot_secondary_tenant(vk_rt, win_id, width, height, frame_slots)
-    print(string.format("[UI BOOTSTRAP] Booting Secondary Tenant %d...", win_id))
-
-    -- [TRIFORCE PATCH]: Publish the Vulkan Instance to the Multiplexer for this specific Tenant
-    EngineAPI.publish_instance(win_id, vk_rt.instance)
-
-    -- Now the C-Core has the instance and will safely generate the surface
-    WindowAPI.boot(win_id, width, height)
-
-    local surface = nil
-    while surface == nil do
-        surface = WindowAPI.get_surface(win_id)
-        sys_sleep(10)
-    end
-
-    local swapchain = require("swapchain")
-    local renderer = require("renderer")
-
-    local sc = swapchain.Init(vk_rt.vk, vk_rt, width, height, nil, surface)
-    local sync = renderer.InitSync(vk_rt.vk, vk_rt.device, frame_slots)
-
-    local wsi = ffi.new("RenderThreadInit")
-    wsi.device = vk_rt.device
-    wsi.queue = vk_rt.queue
-    wsi.transfer_queue = vk_rt.transferQueue
-    wsi.swapchain = sc.handle
-
-    for i = 0, sc.imageCount - 1 do
-        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
-        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
-    end
-    for i = 0, frame_slots - 1 do
-        wsi.image_available[i] = sync.imageAvailable[i]
-        wsi.render_finished[i] = sync.renderFinished[i]
-        wsi.in_flight[i]       = sync.inFlight[i]
-    end
-
-    local dev = vk_rt.device
-    local vk = vk_rt.vk
-    wsi.vkWaitForFences         = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
-    wsi.vkAcquireNextImageKHR   = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
-    wsi.vkResetFences           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
-    wsi.vkQueueSubmit           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
-    wsi.vkQueuePresentKHR       = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
-    wsi.pfnBegin                = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
-    wsi.pfnEnd                  = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
-    wsi.pfnSetCullMode          = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
-    wsi.pfnSetFrontFace         = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
-    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
-    wsi.pfnSetDepthTestEnable   = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
-    wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
-    wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
-
-    -- Allocate and start the stream for the new tenant
-    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex)
-    EngineAPI.init_stream(win_id, wsi)
-
-    return sc, sync
-end
-
-local function rearm_secondary_wsi(vk_rt, sc, sync, win_id)
-    print(string.format("[LUA CO] Re-arming Tenant %d WSI after scorched-earth restart...", win_id))
-    local wsi = ffi.new("RenderThreadInit")
-    wsi.device = vk_rt.device
-    wsi.queue = vk_rt.queue
-    wsi.transfer_queue = vk_rt.transferQueue
-    wsi.swapchain = sc.handle
-
-    for i = 0, sc.imageCount - 1 do
-        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
-        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
-    end
-    for i = 0, 9 do -- Using absolute maximum bound (frame_slots)
-        wsi.image_available[i] = sync.imageAvailable[i]
-        wsi.render_finished[i] = sync.renderFinished[i]
-        wsi.in_flight[i]       = sync.inFlight[i]
-    end
-
-    local dev = vk_rt.device
-    local vk = vk_rt.vk
-    wsi.vkWaitForFences         = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
-    wsi.vkAcquireNextImageKHR   = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
-    wsi.vkResetFences           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
-    wsi.vkQueueSubmit           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
-    wsi.vkQueuePresentKHR       = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
-    wsi.pfnBegin                = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
-    wsi.pfnEnd                  = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
-    wsi.pfnSetCullMode          = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
-    wsi.pfnSetFrontFace         = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
-    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
-    wsi.pfnSetDepthTestEnable   = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
-    wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
-    wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
-
-    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex)
-    EngineAPI.init_stream(win_id, wsi)
 end
 
 -- 5. THE MASTER ORCHESTRATOR
@@ -303,175 +202,104 @@ local function main()
     local last_time = get_time_hires()
     local last_heartbeat = get_time_hires()
 
+    -- Rename your game state to `sim_ctx` to violently enforce the separation in your mind.
+    local sim_ctx = ctx
+
     -- 6. THE DETERMINISTIC RENDER LOOP
     while EngineAPI.is_running() do
-
-        if WindowAPI.was_resized(primary_win_id) then
-            is_resizing = true
-            last_resize_time = get_time_hires()
-        end
-
         local current_time = get_time_hires()
         local frame_time = math.max(0.001, math.min(current_time - last_time, 0.25))
         last_time = current_time
 
-        local mouse_left = WindowAPI.is_mouse_down(primary_win_id, 0)
-        local mouse_x, mouse_y = WindowAPI.get_mouse_pos(primary_win_id)
+        -- A. DETERMINISTIC SIMULATION PHASE (The Headless Truth)
+        sim_ctx.accumulator = sim_ctx.accumulator + frame_time
+        sim_ctx.net_accumulator = sim_ctx.net_accumulator + frame_time
 
-        if mouse_left and not prev_mouse_left then
-            local click_x, click_y = WindowAPI.get_click_pos(primary_win_id)
-            local clicked_idx = Raycast.matrix_raycast_terrain(click_x, click_y, sc.extent.width, sc.extent.height, inv_vp, ctx.rts_grid, ctx.net_identity)
+        Pump.intercept_network(sim_ctx, sim_ctx.sim_tick_count)
+        FSM.tick_playing_state(sim_ctx, FIXED_DT)
 
+        if sim_ctx.net_accumulator >= FIXED_DT then
+            Pump.send_dynamic_history(sim_ctx)
+            sim_ctx.net_accumulator = sim_ctx.net_accumulator % FIXED_DT
+        end
+
+        -- Simulation Input Routing (Only route if Window 0 is focused and clicked)
+        if WindowAPI.is_mouse_down(0, 0) and not prev_mouse_left then
+            local click_x, click_y = WindowAPI.get_click_pos(0)
+            local primary_tenant = TenantRegistry.active[0]
+            local clicked_idx = Raycast.matrix_raycast_terrain(
+                click_x, click_y,
+                primary_tenant.width, primary_tenant.height,
+                primary_tenant.inv_vp,
+                sim_ctx.rts_grid, sim_ctx.net_identity
+            )
             if clicked_idx ~= 65535 then
-                local is_elevated = false
-                for peer = 0, cfg_net.MAX_PLAYERS - 1 do
-                    if ctx.rts_grid.elevation[peer][clicked_idx] > 0 then
-                        is_elevated = true; break
-                    end
-                end
-                local op = is_elevated and 2 or 1
-                InputCore.SubmitCommand(ctx, op, 0, 0, clicked_idx)
+                InputCore.SubmitCommand(sim_ctx, 1, 0, 0, clicked_idx)
             end
         end
-        prev_mouse_left = mouse_left
+        prev_mouse_left = WindowAPI.is_mouse_down(0, 0)
 
-        Pump.intercept_network(ctx, ctx.sim_tick_count)
-        ctx.accumulator = ctx.accumulator + frame_time
-        ctx.net_accumulator = ctx.net_accumulator + frame_time
+        -- B. MULTI-TENANT ORCHESTRATION PHASE (The Visuals)
+        total_time = total_time + frame_time
 
-        FSM.tick_playing_state(ctx, FIXED_DT)
+        -- Determine which window actually has OS focus so we don't spin both cameras at once
+        local active_win_id = ffi.C.vx_input_get_active_window()
 
-        if ctx.net_accumulator >= FIXED_DT then
-            Pump.send_dynamic_history(ctx)
-            ctx.net_accumulator = ctx.net_accumulator % FIXED_DT
-        end
+        for win_id, tenant in pairs(TenantRegistry.active) do
 
-        if current_time - last_heartbeat >= 1.0 then
-            last_heartbeat = current_time
-            print(string.format("\n[HEARTBEAT] Sim Tick: %d | Confirmed: %d | Accum: %.4f", ctx.sim_tick_count, ctx.rollback_arena.confirmed_tick, ctx.accumulator))
-        end
+            -- 1. Phase 2 WSI State Machine (OS Resize Interrupts)
+            if WindowAPI.get_resize_state(win_id) then
+                if not tenant.suspended then
+                    WindowAPI.trigger_wsi_rebuild(win_id)
+                    tenant.suspended = true
+                end
+                goto continue_tenant
+            end
 
-        local last_key = WindowAPI.get_last_key(primary_win_id)
-        if last_key == cfg_gfx.key.esc then EngineAPI.shutdown()
-        elseif last_key == cfg_gfx.key.f5 then wants_hotswap = true
-        elseif last_key == cfg_gfx.key.num1 then active_render_mode = cfg_gfx.mode.dual
-        elseif last_key == cfg_gfx.key.num2 then active_render_mode = cfg_gfx.mode.geom
-        elseif last_key == cfg_gfx.key.num3 then active_render_mode = cfg_gfx.mode.points
-        end
-
-        -- Mini-Weaver Rebuild (Resizing)
-        if is_resizing then
-            if (get_time_hires() - last_resize_time) > RESIZE_COOLDOWN then
-                local new_w, new_h = WindowAPI.get_window_size(primary_win_id)
+            if tenant.suspended then
+                local new_w, new_h = WindowAPI.get_window_size(win_id)
                 if new_w > 0 and new_h > 0 then
-                    print("\n[LUA CO] Window Stable. Initiating Mini-Weaver Rebuild...")
-                    EngineAPI.kill_thread()
-                    vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
+                    tenant.width, tenant.height = new_w, new_h
+                    tenant.suspended = false
 
-                    require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, gfx)
-                    require("renderer").Destroy(vk_rt.vk, vk_rt.device, sync, cfg_gfx.cfg.frame_slots)
-
-                    cfg_gfx.win.w = new_w
-                    cfg_gfx.win.h = new_h
-
-                    local mini_ctx = {
-                        vk_runtime = vk_rt,
-                        desc_state = desc,
-                        old_swapchain = sc.handle,
-                        win_id = primary_win_id
-                    }
-
-                    local resize_co = coroutine.create(function()
-                        for _, stage in ipairs(seq.resize) do
-                            print(string.format("[MINI-WEAVER] Executing: %s", stage.name))
-                            stage.action(mini_ctx)
-                        end
-                        return mini_ctx
-                    end)
-
-                    local r_status, new_ctx
-                    while coroutine.status(resize_co) ~= "dead" do
-                        r_status, new_ctx = coroutine.resume(resize_co)
-                        if not r_status then error("Mini-Weaver Crash: " .. tostring(new_ctx)) end
-                    end
-
-                    require("swapchain").Destroy(vk_rt.vk, vk_rt, sc)
-                    sc = new_ctx.sc_state
-                    gfx = new_ctx.gfx_state
-                    sync = new_ctx.sync_state
-
-                    -- [TENANT 0 RE-ARM]: Rebuilds the primary tenant and wakes up the C-Core threads
-                    seq.boot[10].action(new_ctx)
-
-                    -- [TENANT 1 RE-ARM]: Re-allocates Editor WSI memory wiped by EngineAPI.kill_thread()
-                    rearm_secondary_wsi(vk_rt, editor_sc, editor_sync, editor_win_id)
-
-                    print("[LUA CO] Mini-Weaver Rebuild Complete.\n")
-                    is_resizing = false
-                    last_time = get_time_hires()
-                else
-                    last_resize_time = get_time_hires() - (RESIZE_COOLDOWN * 0.9)
+                    -- WSI rebuild requires updating the swapchain struct pointers
+                    require("swapchain").Destroy(vk_rt.vk, vk_rt, tenant.sc)
+                    tenant.sc = swapchain.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
+                    -- Trigger C-Core re-arm (similar to your rearm_secondary_wsi, but streamlined)
+                    EngineAPI.init_stream(win_id, tenant.sc.handle)
                 end
-            end
-        else
-            -- 1. Ensure the unified color stream is verified (Happens once for the whole engine)
-            if not palette_ready and palette_job_id ~= -1 then
-                if memory.IsTransferComplete(vk_rt, palette_job_id) then
-                    print("[LUA CO] Async Transfer Complete! Unified Palette Haven Online.")
-                    palette_ready = true
-                end
+                goto continue_tenant
             end
 
-            -- 2. Sync Universal Time
-            total_time = total_time + frame_time
-            pc_primary.total_time = total_time
-            pc_editor.total_time = total_time
-
-            -- 3. Update Primary Camera
-            camera_mod.update(cam_primary, frame_time, mouse_x, mouse_y, sc.extent.width, sc.extent.height, primary_win_id)
-
-            -- 4. Sync Editor Camera State (Visual Mirroring)
-            cam_editor.pos.x = cam_primary.pos.x
-            cam_editor.pos.y = cam_primary.pos.y
-            cam_editor.pos.z = cam_primary.pos.z
-            cam_editor.yaw = cam_primary.yaw
-            cam_editor.pitch = cam_primary.pitch
-            cam_editor.ortho_zoom = cam_primary.ortho_zoom
-
-            -- 5. Calculate Independent Matrices based on distinct Window Aspect Ratios
-            camera_mod.get_matrices(cam_primary, sc.extent.width, sc.extent.height, pc_primary.viewProj, inv_vp_primary)
-            camera_mod.get_matrices(cam_editor, editor_sc.extent.width, editor_sc.extent.height, pc_editor.viewProj, inv_vp_editor)
-
-            local current_dt = ctx.accumulator / FIXED_DT
-
-            -- 6. Acquire & Pack Primary Viewport
-            local write_idx_0 = EngineAPI.acquire_render_packet()
-            if write_idx_0 ~= -1 then
-                pc_primary.dt = current_dt
-                render_queue.PackFrame(tenant_ctx, write_idx_0, pc_primary, ctx.rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, sc, ctx.total_tiles, ctx.net_identity)
-                EngineAPI.commit_render_packet(write_idx_0)
+            -- 2. Input Isolation & Camera Update
+            -- Only update the camera if this specific tenant's window is active
+            if win_id == active_win_id then
+                local mouse_x, mouse_y = WindowAPI.get_mouse_pos(win_id)
+                camera_mod.update(tenant.cam, frame_time, mouse_x, mouse_y, tenant.width, tenant.height, win_id)
             end
 
-            -- 7. Acquire & Pack Editor Viewport
-            local write_idx_1 = EngineAPI.acquire_render_packet()
-            if write_idx_1 ~= -1 then
-                pc_editor.dt = current_dt
-                render_queue.PackFrame(tenant_ctx_editor, write_idx_1, pc_editor, ctx.rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, editor_sc, ctx.total_tiles, ctx.net_identity)
-                EngineAPI.commit_render_packet(write_idx_1)
+            camera_mod.get_matrices(tenant.cam, tenant.width, tenant.height, tenant.pc.viewProj, tenant.inv_vp)
+
+            -- 3. Zero-Trust Ring Buffer Handshake
+            local write_idx = EngineAPI.acquire_render_packet()
+            if write_idx == -1 then
+                goto continue_tenant
             end
 
-            -- 8. Global State & Deletion Queue Sync
-            if wants_hotswap then
-                print("\n[LUA] Initiating Lock-Free Shader Hotswap...")
-                require("graphics_pipeline").HotReloadShaders(vk_rt.vk, vk_rt, gfx, frame_count)
-                wants_hotswap = false
-            end
+            -- 4. Pack & Commit
+            tenant.pc.total_time = total_time
+            tenant.pc.dt = sim_ctx.accumulator / FIXED_DT
 
-            if write_idx_0 ~= -1 or write_idx_1 ~= -1 then
-                pump_deletion_queue(vk_rt.vk, vk_rt, frame_count)
-                frame_count = frame_count + 1
-            end
+            -- Passing the specific `tenant` object handles isolation natively.
+            render_queue.PackFrame(tenant, write_idx, tenant.pc, sim_ctx.rts_grid, vram_template,
+                                   render_queues, active_render_mode, master_ptr, memory,
+                                   gfx, desc, tenant.sc, sim_ctx.total_tiles, sim_ctx.net_identity)
+
+            EngineAPI.commit_render_packet(write_idx)
+
+            ::continue_tenant::
         end
+
         sys_sleep(1)
     end
 
