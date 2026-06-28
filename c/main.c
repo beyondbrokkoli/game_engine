@@ -977,6 +977,8 @@ THREAD_FUNC render_thread_loop(void* arg) {
                 .commandBufferCount = 1,
                 .pCommandBuffers = &cmd,
                 .signalSemaphoreCount = 1,
+                // FIX: Sync to the CPU frame, not the GPU image index
+                // .pSignalSemaphores = &win_wsi->render_finished[current_frame]
                 .pSignalSemaphores = &win_wsi->render_finished[img_idx]
             };
 
@@ -986,10 +988,11 @@ THREAD_FUNC render_thread_loop(void* arg) {
             VkPresentInfoKHR presentInfo = {
                 .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .waitSemaphoreCount = 1,
+                // FIX: Sync to the CPU frame, not the GPU image index
                 .pWaitSemaphores = &win_wsi->render_finished[img_idx],
                 .swapchainCount = 1,
                 .pSwapchains = &win_wsi->swapchain,
-                .pImageIndices = &img_idx
+                .pImageIndices = &img_idx // (This remains img_idx, as required by presentation)
             };
 
             PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;

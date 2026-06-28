@@ -99,7 +99,7 @@ local order = {
 --    "lua/vmath.lua",
 --    "lua/vulkan_headers.lua",
     "lua/core_abi.lua",
-    "lua/pipeline_manifest.lua",
+--    "lua/pipeline_manifest.lua",
 --    "lua/dkjson.lua",
 
     -- 4. LUA LEVEL 1 (Base Bindings & Structs)
@@ -111,15 +111,15 @@ local order = {
 --    "lua/json_util.lua",      -- Needs dkjson
 
     -- 5. LUA LEVEL 2 (Vulkan Objects & Game Systems)
---    "lua/vulkan_core.lua",    -- Needs registry_vk, vulkan_headers
+    "lua/vulkan_core.lua",    -- Needs registry_vk, vulkan_headers
     "lua/swapchain.lua",      -- Needs registry_vk
 --    "lua/memory.lua",         -- Needs registry_vk, config_sim
 --    "lua/descriptors.lua",    -- Needs registry_vk
-    "lua/graphics_pipeline.lua", -- Needs registry_vk
+--    "lua/graphics_pipeline.lua", -- Needs registry_vk
 --    "lua/compute_pipeline.lua",  -- Needs registry_vk
-    "lua/renderer.lua",       -- Needs registry_vk, pipeline_manifest
+--    "lua/renderer.lua",       -- Needs registry_vk, pipeline_manifest
 --    "lua/camera.lua",         -- Needs vmath, window_api, config_gfx
-    "lua/render_queue.lua",   -- Needs pipeline_manifest, fixed_math, engine_api
+--    "lua/render_queue.lua",   -- Needs pipeline_manifest, fixed_math, engine_api
 --    "lua/net_pump.lua",       -- Needs network
 --    "lua/fsm_core.lua",       -- Needs network
 --    "lua/game_state.lua",     -- Needs network, fixed_math
