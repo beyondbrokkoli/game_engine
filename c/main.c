@@ -105,8 +105,9 @@ typedef struct {
 
 typedef struct {
     alignas(64) RenderPacket packets[RING_SIZE];
-    alignas(64) _Atomic int ready_idx[MAX_WINDOWS];    // NEW: 4 isolated read pointers
-    alignas(64) _Atomic uint32_t locked_mask;          // Unchanged: 32-bits covers all 16 slots
+    alignas(64) _Atomic int ready_idx[MAX_WINDOWS];
+    alignas(64) _Atomic int local_read[MAX_WINDOWS];   // PROMOTED FROM RENDER THREAD LOCAL
+    alignas(64) _Atomic uint32_t locked_mask;
 } RenderRing;
 
 typedef struct {
@@ -132,7 +133,12 @@ static atomic_flag s_mouse_lock = ATOMIC_FLAG_INIT;
 VkDebugUtilsMessengerEXT g_debugMessenger = VK_NULL_HANDLE;
 
 // FIX INJECTED: Initialize all 4 read pointers to -1
-static RenderRing g_ring = { .ready_idx = {-1, -1, -1, -1}, .locked_mask = 0 };
+static RenderRing g_ring = {
+    .ready_idx = {-1, -1, -1, -1},
+    .local_read = {-1, -1, -1, -1}, // NEW
+    .locked_mask = 0
+};
+
 static RenderThreadInit g_window_wsi[MAX_WINDOWS];
 static atomic_int g_wsi_state[MAX_WINDOWS] = {0, 0, 0, 0};
 static atomic_int g_render_busy[MAX_WINDOWS] = {0, 0, 0, 0};
@@ -488,6 +494,20 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
     }
 
     g_window_wsi[win_id] = *wsi;
+
+    // --- CRITICAL FIX: Reset Ring Buffer State for Resumed Tenant ---
+    int offset = win_id * 4;
+    uint32_t tenant_mask = 0xFu << offset; // 4 bits per tenant
+
+    // 1. Force-unlock all 4 slots for this tenant to prevent deadlock
+    FA(g_ring.locked_mask, ~tenant_mask);
+
+    // 2. Reset write pointer so Lua's vx_stream_acquire starts fresh
+    S(g_ring.ready_idx[win_id], -1);
+
+    // 3. Reset read pointer so C-Core doesn't process stale pre-resize packets
+    S(g_ring.local_read[win_id], -1);
+
     S(g_wsi_state[win_id], 1);
 }
 
@@ -828,6 +848,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
     vkEndCommandBuffer(cmd);
 }
 
+
 THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
     uint32_t t_frame[MAX_WINDOWS] = {0};
@@ -837,8 +858,8 @@ THREAD_FUNC render_thread_loop(void* arg) {
         for (int f = 0; f < 10; f++) active_ring_slots[wid][f] = -1;
     }
 
-    // FIX INJECTED: Track the sequential read state per-tenant
-    int local_read[MAX_WINDOWS] = {-1, -1, -1, -1};
+    // REMOVE THIS LINE:
+    // int local_read[MAX_WINDOWS] = {-1, -1, -1, -1};
 
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
 
@@ -863,23 +884,27 @@ THREAD_FUNC render_thread_loop(void* arg) {
         // 2. Iterate through all active tenants and multiplex their designated chunks
         for (int wid = 0; wid < MAX_WINDOWS; wid++) {
             int ready = L(g_ring.ready_idx[wid]);
+            int local_read_val = L(g_ring.local_read[wid]); // READ GLOBAL ATOMIC
 
             // Skip if no new frames have been committed for this tenant
-            if (ready == -1 || ready == local_read[wid]) {
+            if (ready == -1 || ready == local_read_val) {
                 continue;
             }
 
             int offset = wid * 4;
 
             // Advance sequentially strictly within this tenant's 4-slot boundary
-            if (local_read[wid] == -1) {
-                local_read[wid] = ready;
+            int new_local_read;
+            if (local_read_val == -1) {
+                new_local_read = ready;
             } else {
-                int curr_local = local_read[wid] - offset;
-                local_read[wid] = offset + ((curr_local + 1) % 4);
+                int curr_local = local_read_val - offset;
+                new_local_read = offset + ((curr_local + 1) % 4);
             }
 
-            int read_idx = local_read[wid];
+            S(g_ring.local_read[wid], new_local_read); // WRITE GLOBAL ATOMIC
+
+            int read_idx = new_local_read;
             RenderPacket* p = &g_ring.packets[read_idx];
 
             // Safe-Guard: If WSI is suspended or viewport is dead, drop the packet

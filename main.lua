@@ -294,6 +294,7 @@ local function main()
                 end
 
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
+                -- [FIXED TEARDOWN & REBUILD LOGIC FOR main.lua] --
                 if new_w > 0 and new_h > 0 then
                     print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
                     tenant.width, tenant.height = new_w, new_h
@@ -303,20 +304,25 @@ local function main()
                     local graphics_mod = require("graphics_pipeline")
                     local renderer_mod = require("renderer")
 
-                    -- A. Safe Teardown (Order matters)
-                    graphics_mod.Destroy(vk_rt.vk, vk_rt, gfx)
+                    -- FIX 1: Destroy the correct tenant graphics state, not the global 'gfx' variable!
+                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
                     renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
-                    -- B. Reconstruct the Holy Trinity (Swapchain, Depth Buffer, Sync)
-                    local manifest = require("pipeline_manifest")
+                    -- FIX 2: Preserve the old swapchain handle BEFORE destruction
+                    local old_sc_handle = tenant.sc.handle
 
-                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, nil, WindowAPI.get_surface(win_id))
+                    -- Destroy only the image views of the old swapchain now
+                    for i = 0, tenant.sc.imageCount - 1 do
+                        vk_rt.vk.vkDestroyImageView(vk_rt.device, tenant.sc.imageViews[i], nil)
+                    end
 
-                    -- FIX: Explicitly assign the rebuilt state to the specific tenant!
+                    -- FIX 3: REBUILD - Pass the old handle to Init to maintain X11/Wayland surface association
+                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
                     tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
-
                     tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, cfg_gfx.cfg.frame_slots)
+
+                    -- FIX 4: NOW destroy the old swapchain handle (mirroring the legacy stable sequence)
+                    vk_rt.vk.vkDestroySwapchainKHR(vk_rt.device, old_sc_handle, nil)
 
                     -- C. Safely reconstruct the RenderThreadInit struct for the C-Core
                     local wsi = ffi.new("RenderThreadInit")
