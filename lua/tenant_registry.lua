@@ -31,6 +31,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     wsi.transfer_queue = vk_rt.transferQueue
     wsi.swapchain = sc.handle
 
+    -- Tell the C-Core exactly how many padded sync frames it is allowed to modulo against
+    wsi.max_frames_in_flight = sync.safe_frames or frame_slots
+
     for i = 0, sc.imageCount - 1 do
         wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
         wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])

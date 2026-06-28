@@ -30,6 +30,7 @@ M.specs = {
             { type = "VkQueue", name = "queue" },
             { type = "VkQueue", name = "transfer_queue" },
             { type = "VkSwapchainKHR", name = "swapchain" },
+            { type = "uint32_t", name = "max_frames_in_flight" }, -- [INJECTED TRACKER]
             { type = "uint64_t", name = "swapchain_images", count = 10 },
             { type = "uint64_t", name = "swapchain_views", count = 10 },
             { type = "VkSemaphore", name = "image_available", count = 10 },

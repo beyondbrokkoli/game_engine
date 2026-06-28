@@ -491,10 +491,16 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
 }
 
 EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t gfx_family, uint32_t transfer_family) {
-    if (wid < 0 || wid >= MAX_WINDOWS || !wsi || !wsi->device) {
+    // FIX INJECTED: Aggressive absolute bounds checking pre-evaluation
+    if (wid < 0 || wid >= MAX_WINDOWS) {
+        printf("[C-ERROR] Blocked out-of-bounds tenant allocation: %d\n", wid);
+        return;
+    }
+    if (!wsi || !wsi->device) {
         printf("[C-ERROR] Failed to allocate tenant %d: Invalid WSI or Device.\n", wid);
         return;
     }
+
     if (g_render_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo r_pool_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -502,6 +508,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t g
             .queueFamilyIndex = gfx_family
         };
         vkCreateCommandPool(wsi->device, &r_pool_info, NULL, &g_render_cmd_pools[wid]);
+
         VkCommandBufferAllocateInfo r_alloc_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = g_render_cmd_pools[wid],
@@ -511,6 +518,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t g
         vkAllocateCommandBuffers(wsi->device, &r_alloc_info, g_render_cmd_buffers[wid]);
         printf("[C-CORE] Tenant %d: Render pool and 3x command buffers explicitly allocated.\n", wid);
     }
+
     if (g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo t_pool_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -518,6 +526,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t g
             .queueFamilyIndex = transfer_family
         };
         vkCreateCommandPool(wsi->device, &t_pool_info, NULL, &g_transfer_cmd_pools[wid]);
+
         VkCommandBufferAllocateInfo t_alloc_info = {
             .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
             .commandPool = g_transfer_cmd_pools[wid],
@@ -525,10 +534,8 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi, uint32_t g
             .commandBufferCount = 1
         };
         vkAllocateCommandBuffers(wsi->device, &t_alloc_info, &g_transfer_cmd_buffers[wid]);
-        VkFenceCreateInfo fence_info = {
-            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
-            .flags = 1
-        };
+
+        VkFenceCreateInfo fence_info = { .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO, .flags = 1 };
         vkCreateFence(wsi->device, &fence_info, NULL, &g_transfer_fences[wid]);
         printf("[C-CORE] Tenant %d: Transfer pool, buffer, and fence explicitly allocated.\n", wid);
     }
@@ -566,72 +573,62 @@ THREAD_FUNC transfer_thread_loop(void* arg) {
     printf("[C-CORE] Async Transfer Overlord Online.\n");
     while (L(g_transfer_thread_active) && L(g_engine.mailbox.is_running)) {
         bool worked = false;
-
         for(int i = 0; i < TRANSFER_RING_SIZE; i++) {
             if (L(g_transfer_ring[i].status) == 2) {
                 TransferJob* job = &g_transfer_ring[i];
                 int wid = job->target_window_id;
 
-                // --- DEFENSIVE GUARDS & ZERO-TRUST MULTIPLEXING ---
+                // FIX INJECTED: Transfer Loop Bound Guarding
                 if (wid < 0 || wid >= MAX_WINDOWS || L(g_wsi_state[wid]) == 0) {
-                    // Tenant is dead or currently rebuilding WSI. Drop the job to prevent segfaults.
                     S(job->status, 0);
                     continue;
                 }
 
                 RenderThreadInit* wsi = &g_window_wsi[wid];
-
-                // Double check the resources actually exist for this specific tenant
                 if (!wsi->device || g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
                     S(job->status, 0);
                     continue;
                 }
-                // --------------------------------------------------
 
                 VkCommandBuffer cmd = g_transfer_cmd_buffers[wid];
                 VkFence fence = g_transfer_fences[wid];
-
                 PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)wsi->vkWaitForFences;
                 PFN_vkResetFences pfnReset = (PFN_vkResetFences)wsi->vkResetFences;
                 PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)wsi->vkQueueSubmit;
 
-                // 2-Second GPU Hang Guard
                 VkResult res = pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
                 if (res == VK_TIMEOUT) {
                     printf("[C-FATAL] Tenant %d: GPU Transfer Hang detected!\n", wid);
                     S(job->status, 0);
-                    // Do not kill the whole thread, just break the inner attempt and let the main loop decide
                     break;
                 }
 
                 pfnReset(wsi->device, 1, &fence);
                 vkResetCommandBuffer(cmd, 0);
 
-                VkCommandBufferBeginInfo beginInfo = {
-                    .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
-                };
+                VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
                 vkBeginCommandBuffer(cmd, &beginInfo);
 
-                VkBufferCopy copyRegion = {
-                    .srcOffset = 0,
-                    .dstOffset = 0,
-                    .size = job->size
-                };
+                VkBufferCopy copyRegion = { .srcOffset = 0, .dstOffset = 0, .size = job->size };
                 vkCmdCopyBuffer(cmd, (VkBuffer)job->src_buffer, (VkBuffer)job->dst_buffer, 1, &copyRegion);
                 vkEndCommandBuffer(cmd);
+
+                // FIX INJECTED: Stack-allocated VkSemaphore mapping prevents 64-bit address aliasing segfaults
+                VkSemaphore safe_timeline_semaphore = (VkSemaphore)(uintptr_t)job->timeline_sem;
 
                 VkTimelineSemaphoreSubmitInfo timelineInfo = {
                     .sType = 1000207003, // VK_STRUCTURE_TYPE_TIMELINE_SEMAPHORE_SUBMIT_INFO
                     .signalSemaphoreValueCount = 1,
                     .pSignalSemaphoreValues = &job->signal_val
                 };
+
                 VkSubmitInfo submitInfo = {
                     .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                     .pNext = &timelineInfo,
                     .commandBufferCount = 1,
                     .pCommandBuffers = &cmd,
                     .signalSemaphoreCount = 1,
-                    .pSignalSemaphores = (VkSemaphore*)&job->timeline_sem
+                    .pSignalSemaphores = &safe_timeline_semaphore // Safely mapped stack address
                 };
 
                 pfnSubmit(wsi->transfer_queue, 1, &submitInfo, fence);
@@ -672,14 +669,11 @@ EXPORT void vx_stream_commit(int idx) {
 }
 
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand* queue, uint32_t count, RenderThreadInit* win_wsi) {
-    // Redundant API boundary guard against minimized/0x0 viewports
     if (p->width == 0 || p->height == 0) {
         return;
     }
 
-    VkCommandBufferBeginInfo beginInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
-    };
+    VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     vkBeginCommandBuffer(cmd, &beginInfo);
 
     VkImageMemoryBarrier preBarriers[2] = {0};
@@ -730,6 +724,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
         .pColorAttachments = &colorAttachment,
         .pDepthAttachment = &depthAttachment
     };
+
     pfnBegin(cmd, &renderInfo);
 
     VkViewport viewport = {0.0f, 0.0f, (float)p->width, (float)p->height, 0.0f, 1.0f};
@@ -737,52 +732,64 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    VkDeviceSize offset = 0;
-    VkBuffer vbo = (VkBuffer)p->vertex_buffer;
-    vkCmdBindVertexBuffers(cmd, 0, 1, &vbo, &offset);
-    VkBuffer ibo = (VkBuffer)p->index_buffer;
-    vkCmdBindIndexBuffer(cmd, ibo, 0, VK_INDEX_TYPE_UINT32);
+    // FIX INJECTED: Strict Buffer Verification & Zero-Draw Guard
+    if (count > 0 && p->vertex_buffer != 0 && p->index_buffer != 0) {
+        VkDeviceSize offset = 0;
+        VkBuffer vbo = (VkBuffer)p->vertex_buffer;
+        vkCmdBindVertexBuffers(cmd, 0, 1, &vbo, &offset);
 
-    PFN_vkCmdSetCullModeEXT vkCmdSetCullModeEXT = (PFN_vkCmdSetCullModeEXT)win_wsi->pfnSetCullMode;
-    PFN_vkCmdSetFrontFaceEXT vkCmdSetFrontFaceEXT = (PFN_vkCmdSetFrontFaceEXT)win_wsi->pfnSetFrontFace;
-    PFN_vkCmdSetPrimitiveTopologyEXT vkCmdSetPrimitiveTopologyEXT = (PFN_vkCmdSetPrimitiveTopologyEXT)win_wsi->pfnSetPrimitiveTopology;
-    PFN_vkCmdSetDepthTestEnableEXT vkCmdSetDepthTestEnableEXT = (PFN_vkCmdSetDepthTestEnableEXT)win_wsi->pfnSetDepthTestEnable;
-    PFN_vkCmdSetDepthWriteEnableEXT vkCmdSetDepthWriteEnableEXT = (PFN_vkCmdSetDepthWriteEnableEXT)win_wsi->pfnSetDepthWriteEnable;
-    PFN_vkCmdSetDepthCompareOpEXT vkCmdSetDepthCompareOpEXT = (PFN_vkCmdSetDepthCompareOpEXT)win_wsi->pfnSetDepthCompareOp;
+        VkBuffer ibo = (VkBuffer)p->index_buffer;
+        vkCmdBindIndexBuffer(cmd, ibo, 0, VK_INDEX_TYPE_UINT32);
 
-    uint64_t current_pipeline = 0;
-    uint64_t current_descriptor = 0;
+        PFN_vkCmdSetCullModeEXT vkCmdSetCullModeEXT = (PFN_vkCmdSetCullModeEXT)win_wsi->pfnSetCullMode;
+        PFN_vkCmdSetFrontFaceEXT vkCmdSetFrontFaceEXT = (PFN_vkCmdSetFrontFaceEXT)win_wsi->pfnSetFrontFace;
+        PFN_vkCmdSetPrimitiveTopologyEXT vkCmdSetPrimitiveTopologyEXT = (PFN_vkCmdSetPrimitiveTopologyEXT)win_wsi->pfnSetPrimitiveTopology;
+        PFN_vkCmdSetDepthTestEnableEXT vkCmdSetDepthTestEnableEXT = (PFN_vkCmdSetDepthTestEnableEXT)win_wsi->pfnSetDepthTestEnable;
+        PFN_vkCmdSetDepthWriteEnableEXT vkCmdSetDepthWriteEnableEXT = (PFN_vkCmdSetDepthWriteEnableEXT)win_wsi->pfnSetDepthWriteEnable;
+        PFN_vkCmdSetDepthCompareOpEXT vkCmdSetDepthCompareOpEXT = (PFN_vkCmdSetDepthCompareOpEXT)win_wsi->pfnSetDepthCompareOp;
 
-    for (uint32_t i = 0; i < count; i++) {
-        DrawCommand* draw = &queue[i];
-        if (draw->pipeline_id != current_pipeline) {
-            vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipeline)draw->pipeline_id);
-            current_pipeline = draw->pipeline_id;
+        uint64_t current_pipeline = 0;
+        uint64_t current_descriptor = 0;
+
+        for (uint32_t i = 0; i < count; i++) {
+            DrawCommand* draw = &queue[i];
+
+            if (draw->pipeline_id != current_pipeline) {
+                vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipeline)draw->pipeline_id);
+                current_pipeline = draw->pipeline_id;
+            }
+
+            if (draw->descriptor_set != current_descriptor) {
+                VkDescriptorSet dset = (VkDescriptorSet)draw->descriptor_set;
+                vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipelineLayout)p->gfx_layout, 0, 1, &dset, 0, NULL);
+                current_descriptor = draw->descriptor_set;
+            }
+
+            VkRect2D dyn_scissor = {
+                .offset = { (int32_t)draw->scissor_x, (int32_t)draw->scissor_y },
+                .extent = { (uint32_t)draw->scissor_w, (uint32_t)draw->scissor_h }
+            };
+            vkCmdSetScissor(cmd, 0, 1, &dyn_scissor);
+            vkCmdSetCullModeEXT(cmd, draw->cull_mode);
+            vkCmdSetFrontFaceEXT(cmd, draw->front_face);
+            vkCmdSetPrimitiveTopologyEXT(cmd, draw->topology);
+            vkCmdSetDepthTestEnableEXT(cmd, draw->depth_test);
+            vkCmdSetDepthWriteEnableEXT(cmd, draw->depth_write);
+            vkCmdSetDepthCompareOpEXT(cmd, draw->depth_compare_op);
+
+            vkCmdPushConstants(
+                cmd,
+                (VkPipelineLayout)p->gfx_layout,
+                VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
+                draw->pc_offset,
+                draw->pc_size,
+                draw->push_constants + draw->pc_offset
+            );
+
+            vkCmdDrawIndexed(cmd, draw->index_count, draw->instance_count, draw->first_index, draw->vertex_offset, draw->first_instance);
         }
-        if (draw->descriptor_set != current_descriptor) {
-            VkDescriptorSet dset = (VkDescriptorSet)draw->descriptor_set;
-            vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_GRAPHICS, (VkPipelineLayout)p->gfx_layout, 0, 1, &dset, 0, NULL);
-            current_descriptor = draw->descriptor_set;
-        }
-        VkRect2D scissor = {
-            .offset = { (int32_t)draw->scissor_x, (int32_t)draw->scissor_y },
-            .extent = { (uint32_t)draw->scissor_w, (uint32_t)draw->scissor_h }
-        };
-        vkCmdSetScissor(cmd, 0, 1, &scissor);
-        vkCmdSetCullModeEXT(cmd, draw->cull_mode);
-        vkCmdSetFrontFaceEXT(cmd, draw->front_face);
-        vkCmdSetPrimitiveTopologyEXT(cmd, draw->topology);
-        vkCmdSetDepthTestEnableEXT(cmd, draw->depth_test);
-        vkCmdSetDepthWriteEnableEXT(cmd, draw->depth_write);
-        vkCmdSetDepthCompareOpEXT(cmd, draw->depth_compare_op);
-        vkCmdPushConstants(
-            cmd, (VkPipelineLayout)p->gfx_layout,
-            VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT,
-            draw->pc_offset, draw->pc_size,
-            draw->push_constants + draw->pc_offset
-        );
-        vkCmdDrawIndexed(cmd, draw->index_count, draw->instance_count, draw->first_index, draw->vertex_offset, draw->first_instance );
     }
+
     pfnEnd(cmd);
 
     VkImageMemoryBarrier presentBarrier = {
@@ -794,6 +801,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
         .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
         .dstAccessMask = 0
     };
+
     vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, NULL, 0, NULL, 1, &presentBarrier);
     vkEndCommandBuffer(cmd);
 }
@@ -801,15 +809,16 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand
 THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
     uint32_t t_frame[MAX_WINDOWS] = {0};
-    int active_ring_slots[MAX_WINDOWS][3];
+
+    // FIX INJECTED: Expand local state tracker to struct max limits (10 slots) to avoid OOB
+    int active_ring_slots[MAX_WINDOWS][10];
     for (int wid = 0; wid < MAX_WINDOWS; wid++) {
-        for (int f = 0; f < 3; f++) active_ring_slots[wid][f] = -1;
+        for (int f = 0; f < 10; f++) active_ring_slots[wid][f] = -1;
     }
+
     int local_read = -1;
 
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
-
-        // --- PHASE 2 STATE MACHINE (NON-BLOCKING WSI TEARDOWN) ---
         for (int w = 0; w < MAX_WINDOWS; w++) {
             int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, memory_order_acquire);
             if (cmd == CMD_REBUILD_WSI) {
@@ -817,8 +826,6 @@ THREAD_FUNC render_thread_loop(void* arg) {
                 if (wsi->device) {
                     vkDeviceWaitIdle(wsi->device);
                 }
-
-                // Release the lock. Lua sees window_resized == 0 and resumes sending packets.
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].window_resized, 0, memory_order_release);
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, CMD_IDLE, memory_order_release);
             }
@@ -830,32 +837,32 @@ THREAD_FUNC render_thread_loop(void* arg) {
             continue;
         }
 
-        // --- DEFENSIVE GUARDS & ZERO-TRUST MULTIPLEXING ---
         local_read = ready;
         RenderPacket* p = &g_ring.packets[local_read];
         int wid = p->target_window_id;
 
-        // Bounds Guard
-        if (wid < 0 || wid >= MAX_WINDOWS || L(g_wsi_state[wid]) == 0) {
-            FA(g_ring.locked_mask, ~(1u << local_read)); // Unlock ring slot
+        // FIX INJECTED: Core tenant bounds guard inside the lock-free multiplexer
+        if (wid < 0 || wid >= MAX_WINDOWS) {
+            FA(g_ring.locked_mask, ~(1u << local_read));
             continue;
         }
 
-        // 0x0 Topology Guard
-        if (p->width == 0 || p->height == 0) {
-            FA(g_ring.locked_mask, ~(1u << local_read)); // Unlock ring slot
+        if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
+            FA(g_ring.locked_mask, ~(1u << local_read));
             continue;
         }
-
 
         S(g_render_busy[wid], 1);
-
         RenderThreadInit* win_wsi = &g_window_wsi[wid];
-        uint32_t current_frame = t_frame[wid];
-        VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
 
+        // FIX INJECTED: Safe modulo bounds via dynamic track
+        uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
+        uint32_t current_frame = t_frame[wid] % frame_slots;
+
+        VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
         PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
         VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
+
         if (wait_res == VK_TIMEOUT) {
             printf("[C-FATAL] Tenant %d: GPU Hang detected!\n", wid);
             S(g_render_busy[wid], 0);
@@ -878,9 +885,8 @@ THREAD_FUNC render_thread_loop(void* arg) {
             continue;
         }
 
-        // --- STALE SWAPCHAIN INTERCEPT (Triggers Phase 2 in Lua) ---
         if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-            S(g_engine.mailbox.tenants[wid].window_resized, 1); // UPDATED TO AoS
+            S(g_engine.mailbox.tenants[wid].window_resized, 1);
             S(g_render_busy[wid], 0);
             SLEEP_MS(10);
             continue;
@@ -888,10 +894,11 @@ THREAD_FUNC render_thread_loop(void* arg) {
 
         PFN_vkResetFences pfnReset = (PFN_vkResetFences)win_wsi->vkResetFences;
         pfnReset(win_wsi->device, 1, &win_wsi->in_flight[current_frame]);
+
         p->swapchain_image = win_wsi->swapchain_images[img_idx];
         p->swapchain_view = win_wsi->swapchain_views[img_idx];
-        vkResetCommandBuffer(cmd, 0);
 
+        vkResetCommandBuffer(cmd, 0);
         vx_record_commands(cmd, p, p->draw_queue, p->draw_count, win_wsi);
 
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
@@ -905,6 +912,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
             .signalSemaphoreCount = 1,
             .pSignalSemaphores = &win_wsi->render_finished[img_idx]
         };
+
         PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
         pfnSubmit(win_wsi->queue, 1, &submitInfo, win_wsi->in_flight[current_frame]);
 
@@ -916,11 +924,14 @@ THREAD_FUNC render_thread_loop(void* arg) {
             .pSwapchains = &win_wsi->swapchain,
             .pImageIndices = &img_idx
         };
+
         PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
         pfnPresent(win_wsi->queue, &presentInfo);
 
         S(g_render_busy[wid], 0);
-        t_frame[wid] = (current_frame + 1) % 3;
+
+        // FIX INJECTED: Clamped sync modulo
+        t_frame[wid] = (current_frame + 1) % frame_slots;
     }
     printf("[C-CORE] Async Render Multiplexer gracefully terminated.\n");
     return NULL;
