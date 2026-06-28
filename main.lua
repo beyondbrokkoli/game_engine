@@ -140,9 +140,9 @@ local function main()
     if local_port < 1000 then local_port = 50000 + local_port end
 
     assert(net.Host(local_port), "FATAL: Failed to bind local socket port " .. local_port)
-    
+
     -- Network topology handled cleanly via external module
-    local my_local_ip = "127.0.0.1" 
+    local my_local_ip = "127.0.0.1"
     local session_token, local_id, p2p_established, active_peers, status_data = NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
 
     local ctx = {
@@ -173,13 +173,22 @@ local function main()
         if not status then error("Fatal Weaver Crash: " .. tostring(engine_ctx)) end
     end
 
-    print("[LUA IO] Weaver sequence complete! Unpacking Context...")
+print("[LUA IO] Weaver sequence complete! Unpacking Context...")
     local vk_rt = engine_ctx.vk_runtime
     local sc = engine_ctx.sc_state
     local desc = engine_ctx.desc_state
     local gfx = engine_ctx.gfx_state
     local sync = engine_ctx.sync_state
     local memory = require("memory")
+
+    -- [PHASE 1: MULTIPLEXER TENANT BOOT]
+    local editor_win_id = 1
+    local tenant_ctx_editor = core_abi.create_tenant_context(editor_win_id)
+
+    -- Boot the second WSI (Window, Swapchain, and Sync Primitives)
+    local editor_sc, editor_sync = boot_secondary_tenant(vk_rt, editor_win_id, 800, 600, cfg_gfx.cfg.frame_slots)
+    print("[LUA CO] Editor Tenant Mapped and Async Stream Allocated.")
+    -- ====================================================================
 
     print("[LUA CO] Initializing VRAM Index Buffer with Strict Topology...")
     local index_ptr = ffi.cast("uint32_t*", memory.Mapped["MASTER_INDEX_BLOCK"])
@@ -191,15 +200,23 @@ local function main()
     ffi.copy(index_ptr, iso_indices, 36 * 4)
 
     local MAX_DRAW_COMMANDS = 1024
-    local render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_gfx.cfg.frame_slots)
+    -- We double the allocation here because we are now pushing TWO packets per frame.
+    local render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_gfx.cfg.frame_slots * 2)
     local frame_count = 0
 
-    local pc = ffi.new("PushConstants")
-    pc.aos_current_idx, pc.aos_prev_idx, pc.dt = 0, 0, 0.0
+    -- [PHASE 1: DUAL CAMERA & STATE SEPARATION]
+    local pc_primary = ffi.new("PushConstants")
+    pc_primary.aos_current_idx, pc_primary.aos_prev_idx, pc_primary.dt = 0, 0, 0.0
+
+    local pc_editor = ffi.new("PushConstants")
+    pc_editor.aos_current_idx, pc_editor.aos_prev_idx, pc_editor.dt = 0, 0, 0.0
 
     local camera_mod = require("camera")
-    local cam = camera_mod.new()
-    local inv_vp = ffi.new("mat4_t")
+    local cam_primary = camera_mod.new()
+    local cam_editor = camera_mod.new()
+
+    local inv_vp_primary = ffi.new("mat4_t")
+    local inv_vp_editor = ffi.new("mat4_t")
 
     local total_time = 0.0
     local wants_hotswap = false
@@ -238,7 +255,7 @@ local function main()
     local gfx_pipeline_module = require("graphics_pipeline")
     local pump_deletion_queue = gfx_pipeline_module.PumpDeletionQueue
 
-    print("[NET] Scene loaded. Camera unlocked. Awaiting Timeline Synchronization...")
+    print("[NET] Scene loaded. Cameras unlocked. Awaiting Timeline Synchronization...")
     local last_time = get_time_hires()
     local last_heartbeat = get_time_hires()
 
@@ -348,33 +365,60 @@ local function main()
                 end
             end
         else
+            -- 1. Ensure the unified color stream is verified (Happens once for the whole engine)
             if not palette_ready and palette_job_id ~= -1 then
                 if memory.IsTransferComplete(vk_rt, palette_job_id) then
-                    print("[LUA CO] Async Transfer Complete! Palette Haven Online.")
+                    print("[LUA CO] Async Transfer Complete! Unified Palette Haven Online.")
                     palette_ready = true
                 end
             end
 
+            -- 2. Sync Universal Time
             total_time = total_time + frame_time
-            pc.total_time = total_time
+            pc_primary.total_time = total_time
+            pc_editor.total_time = total_time
 
-            camera_mod.update(cam, frame_time, mouse_x, mouse_y, sc.extent.width, sc.extent.height, primary_win_id)
-            camera_mod.get_matrices(cam, sc.extent.width, sc.extent.height, pc.viewProj, inv_vp)
+            -- 3. Update Primary Camera
+            camera_mod.update(cam_primary, frame_time, mouse_x, mouse_y, sc.extent.width, sc.extent.height, primary_win_id)
 
-            local write_idx = EngineAPI.acquire_render_packet()
-            if write_idx ~= -1 then
-                pc.dt = ctx.accumulator / FIXED_DT
+            -- 4. Sync Editor Camera State (Visual Mirroring)
+            cam_editor.pos.x = cam_primary.pos.x
+            cam_editor.pos.y = cam_primary.pos.y
+            cam_editor.pos.z = cam_primary.pos.z
+            cam_editor.yaw = cam_primary.yaw
+            cam_editor.pitch = cam_primary.pitch
+            cam_editor.ortho_zoom = cam_primary.ortho_zoom
 
-                -- [TRIFORCE PATCH] Using tenant_ctx for stateless context injection
-                render_queue.PackFrame(tenant_ctx, write_idx, pc, ctx.rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, sc, ctx.total_tiles, ctx.net_identity)
+            -- 5. Calculate Independent Matrices based on distinct Window Aspect Ratios
+            camera_mod.get_matrices(cam_primary, sc.extent.width, sc.extent.height, pc_primary.viewProj, inv_vp_primary)
+            camera_mod.get_matrices(cam_editor, editor_sc.extent.width, editor_sc.extent.height, pc_editor.viewProj, inv_vp_editor)
 
-                if wants_hotswap then
-                    print("\n[LUA] Initiating Lock-Free Shader Hotswap...")
-                    require("graphics_pipeline").HotReloadShaders(vk_rt.vk, vk_rt, gfx, frame_count)
-                    wants_hotswap = false
-                end
+            local current_dt = ctx.accumulator / FIXED_DT
 
-                EngineAPI.commit_render_packet(write_idx)
+            -- 6. Acquire & Pack Primary Viewport
+            local write_idx_0 = EngineAPI.acquire_render_packet()
+            if write_idx_0 ~= -1 then
+                pc_primary.dt = current_dt
+                render_queue.PackFrame(tenant_ctx, write_idx_0, pc_primary, ctx.rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, sc, ctx.total_tiles, ctx.net_identity)
+                EngineAPI.commit_render_packet(write_idx_0)
+            end
+
+            -- 7. Acquire & Pack Editor Viewport
+            local write_idx_1 = EngineAPI.acquire_render_packet()
+            if write_idx_1 ~= -1 then
+                pc_editor.dt = current_dt
+                render_queue.PackFrame(tenant_ctx_editor, write_idx_1, pc_editor, ctx.rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, editor_sc, ctx.total_tiles, ctx.net_identity)
+                EngineAPI.commit_render_packet(write_idx_1)
+            end
+
+            -- 8. Global State & Deletion Queue Sync
+            if wants_hotswap then
+                print("\n[LUA] Initiating Lock-Free Shader Hotswap...")
+                require("graphics_pipeline").HotReloadShaders(vk_rt.vk, vk_rt, gfx, frame_count)
+                wants_hotswap = false
+            end
+
+            if write_idx_0 ~= -1 or write_idx_1 ~= -1 then
                 pump_deletion_queue(vk_rt.vk, vk_rt, frame_count)
                 frame_count = frame_count + 1
             end
