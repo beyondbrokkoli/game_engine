@@ -173,19 +173,32 @@ EXPORT const char** vx_sys_glfw_extensions(uint32_t* count) {
 
 EXPORT void vx_sys_publish_instance(int win_id, void* instance) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
-    S(g_engine.mailbox.vk_instance[win_id], instance);
+    // FIXED: Routed through the 'tenants' array
+    S(g_engine.mailbox.tenants[win_id].vk_instance, instance);
 }
 
 EXPORT void* vx_sys_get_surface(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return NULL;
-    return L(g_engine.mailbox.vk_surface[win_id]);
+    // FIXED: Routed through the 'tenants' array
+    return L(g_engine.mailbox.tenants[win_id].vk_surface);
 }
 
 EXPORT void vx_sys_set_cmd(int win_id, int cmd, int w, int h) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
-    S_R(g_engine.mailbox.glfw_arg_w[win_id], w);
-    S_R(g_engine.mailbox.glfw_arg_h[win_id], h);
-    S(g_engine.mailbox.glfw_cmd[win_id], cmd);
+    // FIXED: Routed through the 'tenants' array
+    S_R(g_engine.mailbox.tenants[win_id].glfw_arg_w, w);
+    S_R(g_engine.mailbox.tenants[win_id].glfw_arg_h, h);
+    S(g_engine.mailbox.tenants[win_id].glfw_cmd, cmd);
+}
+
+EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) {
+        *w = 0; *h = 0;
+        return;
+    }
+    // FIXED: Routed through the 'tenants' array
+    *w = L(g_engine.mailbox.tenants[win_id].win_w);
+    *h = L(g_engine.mailbox.tenants[win_id].win_h);
 }
 
 // 2. Update Initialization
@@ -408,22 +421,15 @@ EXPORT int vx_sys_get_resize_state(int win_id) {
     return atomic_load_explicit(&g_engine.mailbox.tenants[win_id].window_resized, memory_order_acquire);
 }
 
-EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) {
-        *w = 0; *h = 0;
-        return;
-    }
-    *w = L(g_engine.mailbox.win_w[win_id]);
-    *h = L(g_engine.mailbox.win_h[win_id]);
-}
-
 void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     if (width == 0 || height == 0) return;
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
-    S(g_engine.mailbox.win_w[id], width);
-    S(g_engine.mailbox.win_h[id], height);
-    S(g_engine.mailbox.window_resized[id], 1);
+
+    // FIXED: Routed through the 'tenants' array
+    S(g_engine.mailbox.tenants[id].win_w, width);
+    S(g_engine.mailbox.tenants[id].win_h, height);
+    S(g_engine.mailbox.tenants[id].window_resized, 1);
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
@@ -975,7 +981,10 @@ int main(int argc, char** argv) {
         }
         if (has_windows) glfwPollEvents();
         for (int id = 0; id < MAX_WINDOWS; id++) {
-            int cmd = E_A(g_engine.mailbox.glfw_cmd[id], CMD_IDLE);
+            
+            // FIXED: Route through .tenants[id]
+            int cmd = E_A(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+            
             if (cmd == CMD_BOOT_WINDOW && windows[id] == NULL) {
                 for (int i = 0; i < MAX_WINDOWS; i++) {
                     if (L(g_wsi_state[i]) == 1) {
@@ -985,8 +994,11 @@ int main(int argc, char** argv) {
                         }
                     }
                 }
-                int w = L_R(g_engine.mailbox.glfw_arg_w[id]);
-                int h = L_R(g_engine.mailbox.glfw_arg_h[id]);
+                
+                // FIXED: Route through .tenants[id]
+                int w = L_R(g_engine.mailbox.tenants[id].glfw_arg_w);
+                int h = L_R(g_engine.mailbox.tenants[id].glfw_arg_h);
+                
                 glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
                 glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
                 windows[id] = glfwCreateWindow(w, h, "Weaver Engine Editor", NULL, NULL);
@@ -1000,15 +1012,22 @@ int main(int argc, char** argv) {
                 glfwSetKeyCallback(windows[id], glfw_key_callback);
                 glfwSetCursorPosCallback(windows[id], glfw_cursor_callback);
                 glfwSetMouseButtonCallback(windows[id], glfw_mouse_button_callback);
+                
                 int fb_w, fb_h;
                 glfwGetFramebufferSize(windows[id], &fb_w, &fb_h);
-                S(g_engine.mailbox.win_w[id], fb_w);
-                S(g_engine.mailbox.win_h[id], fb_h);
-                void* instance = L(g_engine.mailbox.vk_instance[id]);
+                
+                // FIXED: Route through .tenants[id]
+                S(g_engine.mailbox.tenants[id].win_w, fb_w);
+                S(g_engine.mailbox.tenants[id].win_h, fb_h);
+                
+                // FIXED: Route through .tenants[id]
+                void* instance = L(g_engine.mailbox.tenants[id].vk_instance);
+                
                 if (instance != NULL) {
                     VkSurfaceKHR surface;
                     if (glfwCreateWindowSurface((VkInstance)instance, windows[id], NULL, &surface) == VK_SUCCESS) {
-                        S(g_engine.mailbox.vk_surface[id], (void*)surface);
+                        // FIXED: Route through .tenants[id]
+                        S(g_engine.mailbox.tenants[id].vk_surface, (void*)surface);
                         printf("[C-CORE] Tenant %d: Window & Surface Created safely!\n", id);
                     }
                 } else {
@@ -1049,17 +1068,22 @@ int main(int argc, char** argv) {
                 }
                 glfwDestroyWindow(windows[id]);
                 windows[id] = NULL;
-                S(g_engine.mailbox.vk_surface[id], NULL);
+                
+                // FIXED: Route through .tenants[id]
+                S(g_engine.mailbox.tenants[id].vk_surface, NULL);
                 printf("[C-CORE] Tenant %d Window & Explicit Allocations Destroyed Safely.\n", id);
             }
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
-                S(g_engine.mailbox.last_key_pressed[id], GLFW_KEY_ESCAPE);
+                // FIXED: Route through .tenants[id]
+                S(g_engine.mailbox.tenants[id].last_key_pressed, GLFW_KEY_ESCAPE);
                 glfwSetWindowShouldClose(windows[id], GLFW_FALSE);
             }
         }
         SLEEP_MS(1);
     }
     printf("\n[C-CORE] Shutdown triggered. Waiting for Lua VM...\n");
+    
+    // NOTE: lua_finished remains global. This is correct!
     while (L(g_engine.mailbox.lua_finished) == 0) {
         SLEEP_MS(1);
     }
