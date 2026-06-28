@@ -61,7 +61,11 @@ end
 
 -- 4. BOOTSTRAP COROUTINE
 local function boot_weaver()
-    local boot_ctx = { win_id = primary_win_id }
+    -- [PATCH]: Explicitly define win_id as 0 since the global is gone.
+    -- I also added old_swapchain = nil just to explicitly define the schema
+    -- before sequence.lua tries to read it in step 5.
+    local boot_ctx = { win_id = 0, old_swapchain = nil }
+
     for i, stage in ipairs(seq.boot) do
         print(string.format("[WEAVER] Executing Stage %d: %s", i, stage.name))
         local signal = stage.action(boot_ctx)
@@ -125,9 +129,7 @@ local function main()
     local sync = engine_ctx.sync_state -- ALERT: This is Tenant 0's Sync!
     local memory = require("memory")
 
-    -- ====================================================================
     -- [PHASE 1: MULTIPLEXER TENANT REGISTRY INITIATION]
-    -- ====================================================================
     local TenantRegistry = require("tenant_registry")
     local camera_mod = require("camera")
 
@@ -151,8 +153,6 @@ local function main()
     TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
     print("[LUA CO] Multi-Tenant Registry Online.")
 
-    -- ====================================================================
-
     print("[LUA CO] Initializing VRAM Index Buffer with Strict Topology...")
     local index_ptr = ffi.cast("uint32_t*", memory.Mapped["MASTER_INDEX_BLOCK"])
     local iso_indices = ffi.new("uint32_t[36]", {
@@ -166,7 +166,7 @@ local function main()
     local render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_gfx.cfg.frame_slots * 2)
     local frame_count = 0
 
-    -- [ANNIHILATED]: pc_primary, pc_editor, cam_primary, cam_editor, inv_vp_primary, inv_vp_editor. 
+    -- [ANNIHILATED]: pc_primary, pc_editor, cam_primary, cam_editor, inv_vp_primary, inv_vp_editor.
     -- These are now securely encapsulated within TenantRegistry.active[win_id].
 
     local total_time = 0.0
