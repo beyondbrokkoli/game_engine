@@ -105,8 +105,8 @@ typedef struct {
 
 typedef struct {
     alignas(64) RenderPacket packets[RING_SIZE];
-    alignas(64) _Atomic int ready_idx;
-    alignas(64) _Atomic uint32_t locked_mask;
+    alignas(64) _Atomic int ready_idx[MAX_WINDOWS];    // NEW: 4 isolated read pointers
+    alignas(64) _Atomic uint32_t locked_mask;          // Unchanged: 32-bits covers all 16 slots
 } RenderRing;
 
 typedef struct {
@@ -115,8 +115,8 @@ typedef struct {
     uint64_t size;
     uint64_t timeline_sem;
     uint64_t signal_val;
-    int target_window_id;      // NEW: Tenant Binding
-    uint32_t _pad;             // Pad to 48 bytes total payload
+    int target_window_id;
+    uint32_t _pad;
     alignas(64) _Atomic int status;
 } TransferJob;
 
@@ -131,7 +131,8 @@ bool first_mouse[MAX_WINDOWS] = {true, true, true, true};
 static atomic_flag s_mouse_lock = ATOMIC_FLAG_INIT;
 VkDebugUtilsMessengerEXT g_debugMessenger = VK_NULL_HANDLE;
 
-static RenderRing g_ring = { .ready_idx = -1, .locked_mask = 0 };
+// FIX INJECTED: Initialize all 4 read pointers to -1
+static RenderRing g_ring = { .ready_idx = {-1, -1, -1, -1}, .locked_mask = 0 };
 static RenderThreadInit g_window_wsi[MAX_WINDOWS];
 static atomic_int g_wsi_state[MAX_WINDOWS] = {0, 0, 0, 0};
 static atomic_int g_render_busy[MAX_WINDOWS] = {0, 0, 0, 0};
@@ -655,22 +656,34 @@ EXPORT RenderPacket* vx_stream_packet(int idx) {
     return &g_ring.packets[idx];
 }
 
-EXPORT int vx_stream_acquire() {
+// FIX INJECTED: Tenant-Specific Acquisition
+EXPORT int vx_stream_acquire(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return -1;
+
     uint32_t mask = L(g_ring.locked_mask);
-    int ready = L(g_ring.ready_idx);
-    for (int i = 1; i <= RING_SIZE; i++) {
-        int idx = (ready + i) % RING_SIZE;
-        if ((mask & (1 << idx)) == 0) {
-            FO(g_ring.locked_mask, (1 << idx));
-            return idx;
+    int ready = L(g_ring.ready_idx[win_id]);
+
+    // The mathematical cage: strictly bounds indexing to the tenant's 4-slot chunk
+    int offset = win_id * 4;
+
+    for (int i = 1; i <= 4; i++) {
+        int local_curr = (ready == -1) ? -1 : (ready - offset);
+        int next_local = (local_curr + i) % 4;
+        int global_idx = offset + next_local;
+
+        if ((mask & (1u << global_idx)) == 0) {
+            FO(g_ring.locked_mask, (1u << global_idx));
+            return global_idx;
         }
     }
-    return -1;
+    return -1; // Tenant's specific 4-slot ring is full
 }
 
-EXPORT void vx_stream_commit(int idx) {
+// FIX INJECTED: Tenant-Specific Commit
+EXPORT void vx_stream_commit(int win_id, int idx) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return;
     atomic_thread_fence(memory_order_release);
-    S(g_ring.ready_idx, idx);
+    S(g_ring.ready_idx[win_id], idx);
 }
 
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand* queue, uint32_t count, RenderThreadInit* win_wsi) {
@@ -824,162 +837,143 @@ THREAD_FUNC render_thread_loop(void* arg) {
         for (int f = 0; f < 10; f++) active_ring_slots[wid][f] = -1;
     }
 
-    int local_read = -1;
+    // FIX INJECTED: Track the sequential read state per-tenant
+    int local_read[MAX_WINDOWS] = {-1, -1, -1, -1};
 
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
+
+        // 1. Process Window OS Commands
         for (int w = 0; w < MAX_WINDOWS; w++) {
             int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, memory_order_acquire);
 
-            // --- THE WSI HANDSHAKE INTERCEPT ---
             if (cmd == CMD_REBUILD_WSI) {
                 RenderThreadInit* wsi = &g_window_wsi[w];
                 if (wsi->device) {
                     vkDeviceWaitIdle(wsi->device);
                 }
 
-                // FIX INJECTED: Suspend the tenant stream. The multiplexer will now bypass
-                // this window entirely, making it safe for Lua to destroy the Vulkan objects.
+                // Suspend the tenant stream to allow safe Lua teardown
                 S(g_wsi_state[w], 0);
 
-                // Release the lock. Lua sees window_resized == 0 and begins the rebuild.
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].window_resized, 0, memory_order_release);
                 atomic_store_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, CMD_IDLE, memory_order_release);
             }
         }
 
-        int ready = L(g_ring.ready_idx);
+        // 2. Iterate through all active tenants and multiplex their designated chunks
+        for (int wid = 0; wid < MAX_WINDOWS; wid++) {
+            int ready = L(g_ring.ready_idx[wid]);
 
-        // If Lua hasn't committed anything yet, or we've caught up to the latest packet
-        if (ready == -1 || ready == local_read) {
-            SLEEP_MS(1);
-            continue;
-        }
+            // Skip if no new frames have been committed for this tenant
+            if (ready == -1 || ready == local_read[wid]) {
+                continue;
+            }
 
-        // FIX 1: Enforce strict sequential reads. Never jump to ready_idx.
-        // Since Lua always starts at slot 0, the C-Core must also start at 0.
-        if (local_read == -1) {
-            local_read = 0;
-        } else {
-            local_read = (local_read + 1) % RING_SIZE;
-        }
+            int offset = wid * 4;
 
-        RenderPacket* p = &g_ring.packets[local_read];
-        int wid = p->target_window_id;
+            // Advance sequentially strictly within this tenant's 4-slot boundary
+            if (local_read[wid] == -1) {
+                local_read[wid] = ready;
+            } else {
+                int curr_local = local_read[wid] - offset;
+                local_read[wid] = offset + ((curr_local + 1) % 4);
+            }
 
-        if (wid < 0 || wid >= MAX_WINDOWS) {
-            FA(g_ring.locked_mask, ~(1u << local_read));
-            continue;
-        }
+            int read_idx = local_read[wid];
+            RenderPacket* p = &g_ring.packets[read_idx];
 
-        // Safe-Guard: If g_wsi_state is 0 (suspended for resize), drop the packet and continue.
-        if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
-            FA(g_ring.locked_mask, ~(1u << local_read));
-            continue;
-        }
+            // Safe-Guard: If WSI is suspended or viewport is dead, drop the packet
+            if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
+                FA(g_ring.locked_mask, ~(1u << read_idx));
+                continue;
+            }
 
-        S(g_render_busy[wid], 1);
-        RenderThreadInit* win_wsi = &g_window_wsi[wid];
+            S(g_render_busy[wid], 1);
+            RenderThreadInit* win_wsi = &g_window_wsi[wid];
 
-        // Clamp Lua's requested frame_slots to the C-side static allocation bounds (3)
-        uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
-        if (frame_slots > 3) frame_slots = 3;
+            // Clamp frame sync to static bounds
+            uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
+            if (frame_slots > 3) frame_slots = 3;
 
-        uint32_t current_frame = t_frame[wid] % frame_slots;
-        VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
+            uint32_t current_frame = t_frame[wid] % frame_slots;
+            VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
 
-        PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
-        VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
+            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
+            VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
 
-        if (wait_res == VK_TIMEOUT) {
-            printf("[C-FATAL] Tenant %d: GPU Hang detected!\n", wid);
+            if (wait_res == VK_TIMEOUT) {
+                printf("[C-FATAL] Tenant %d: GPU Hang detected!\n", wid);
+                S(g_render_busy[wid], 0);
+                break;
+            }
+
+            int finished_slot = active_ring_slots[wid][current_frame];
+            if (finished_slot != -1 && finished_slot != read_idx) {
+                FA(g_ring.locked_mask, ~(1u << finished_slot));
+            }
+            active_ring_slots[wid][current_frame] = read_idx;
+
+            PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
+            uint32_t img_idx;
+            VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain, 5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
+
+            if (res == VK_TIMEOUT || res == VK_NOT_READY) {
+                S(g_render_busy[wid], 0);
+                continue;
+            }
+
+            if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+                S(g_engine.mailbox.tenants[wid].window_resized, 1);
+                S(g_render_busy[wid], 0);
+                SLEEP_MS(10);
+                continue;
+            }
+
+            PFN_vkResetFences pfnReset = (PFN_vkResetFences)win_wsi->vkResetFences;
+            pfnReset(win_wsi->device, 1, &win_wsi->in_flight[current_frame]);
+
+            p->swapchain_image = win_wsi->swapchain_images[img_idx];
+            p->swapchain_view = win_wsi->swapchain_views[img_idx];
+
+            vkResetCommandBuffer(cmd, 0);
+            vx_record_commands(cmd, p, p->draw_queue, p->draw_count, win_wsi);
+
+            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkSubmitInfo submitInfo = {
+                .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = &win_wsi->image_available[current_frame],
+                .pWaitDstStageMask = &waitStage,
+                .commandBufferCount = 1,
+                .pCommandBuffers = &cmd,
+                .signalSemaphoreCount = 1,
+                .pSignalSemaphores = &win_wsi->render_finished[img_idx]
+            };
+
+            PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
+            pfnSubmit(win_wsi->queue, 1, &submitInfo, win_wsi->in_flight[current_frame]);
+
+            VkPresentInfoKHR presentInfo = {
+                .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
+                .waitSemaphoreCount = 1,
+                .pWaitSemaphores = &win_wsi->render_finished[img_idx],
+                .swapchainCount = 1,
+                .pSwapchains = &win_wsi->swapchain,
+                .pImageIndices = &img_idx
+            };
+
+            PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
+            pfnPresent(win_wsi->queue, &presentInfo);
+
             S(g_render_busy[wid], 0);
-            break;
+            t_frame[wid] = (current_frame + 1) % frame_slots;
         }
 
-        int finished_slot = active_ring_slots[wid][current_frame];
-        if (finished_slot != -1 && finished_slot != local_read) {
-            FA(g_ring.locked_mask, ~(1u << finished_slot));
-        }
-        active_ring_slots[wid][current_frame] = local_read;
-
-        PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
-        uint32_t img_idx;
-        VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain, 5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
-
-        if (res == VK_TIMEOUT || res == VK_NOT_READY) {
-            S(g_render_busy[wid], 0);
-            SLEEP_MS(1);
-            continue;
-        }
-
-        if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-            S(g_engine.mailbox.tenants[wid].window_resized, 1);
-            S(g_render_busy[wid], 0);
-            SLEEP_MS(10);
-            continue;
-        }
-
-        PFN_vkResetFences pfnReset = (PFN_vkResetFences)win_wsi->vkResetFences;
-        pfnReset(win_wsi->device, 1, &win_wsi->in_flight[current_frame]);
-
-        p->swapchain_image = win_wsi->swapchain_images[img_idx];
-        p->swapchain_view = win_wsi->swapchain_views[img_idx];
-
-        vkResetCommandBuffer(cmd, 0);
-        vx_record_commands(cmd, p, p->draw_queue, p->draw_count, win_wsi);
-
-        VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-        VkSubmitInfo submitInfo = {
-            .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &win_wsi->image_available[current_frame],
-            .pWaitDstStageMask = &waitStage,
-            .commandBufferCount = 1,
-            .pCommandBuffers = &cmd,
-            .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &win_wsi->render_finished[img_idx]
-        };
-
-        PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
-        pfnSubmit(win_wsi->queue, 1, &submitInfo, win_wsi->in_flight[current_frame]);
-
-        VkPresentInfoKHR presentInfo = {
-            .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
-            .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &win_wsi->render_finished[img_idx],
-            .swapchainCount = 1,
-            .pSwapchains = &win_wsi->swapchain,
-            .pImageIndices = &img_idx
-        };
-
-        PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
-        pfnPresent(win_wsi->queue, &presentInfo);
-
-        S(g_render_busy[wid], 0);
-        t_frame[wid] = (current_frame + 1) % frame_slots;
+        // Single sleep cycle after all active tenants have been checked/processed
+        SLEEP_MS(1);
     }
     printf("[C-CORE] Async Render Multiplexer gracefully terminated.\n");
     return NULL;
-}
-
-EXPORT void vx_thread_start() {
-    S(g_render_thread_active, 1);
-    S(g_transfer_thread_active, 1);
-    g_render_thread = vmath_thread_start(render_thread_loop, NULL);
-    g_transfer_thread = vmath_thread_start(transfer_thread_loop, NULL);
-}
-
-THREAD_FUNC lua_co_overlord_loop(void* arg) {
-    printf("[LUA-OS-THREAD] Booting Lua VM...\n");
-    lua_State* L = luaL_newstate();
-    luaL_openlibs(L);
-    if (luaL_dofile(L, "main.lua") != LUA_OK) {
-        printf("\n[LUA FATAL ERROR] %s\n", lua_tostring(L, -1));
-        vx_core_shutdown();
-    }
-    lua_close(L);
-    printf("[LUA-OS-THREAD] VM Destroyed.\n");
-    return THREAD_RETURN_VAL;
 }
 
 EXPORT void vx_thread_kill() {
