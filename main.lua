@@ -35,6 +35,9 @@ local Pump = require("net_pump").init(app_ctx)
 local FSM = require("fsm_core").init(app_ctx, Game)
 local TenantRegistry = require("tenant_registry")
 
+local graphics_mod = require("graphics_pipeline")
+local manifest = require("pipeline_manifest")
+
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
     if jit.os == "Windows" then ffi.C.Sleep(ms) else ffi.C.usleep(ms * 1000) end
@@ -151,6 +154,16 @@ local function main()
 
     -- 2. Boot the Secondary Editor Tenant dynamically
     TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
+
+    -- FIX APPLIED: Forging the isolated Depth Buffer & Pipeline state for Tenant 1!
+    TenantRegistry.active[1].gfx = graphics_mod.Init(
+        vk_rt.vk, vk_rt,
+        800, 600,
+        desc.pipelineLayout,
+        TenantRegistry.active[1].sc.format,
+        manifest.graphics
+    )
+
     print("[LUA CO] Multi-Tenant Registry Online.")
 
     print("[LUA CO] Initializing VRAM Index Buffer with Strict Topology...")
