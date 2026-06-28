@@ -5,6 +5,8 @@ digraph WeaverEngine {
   "sequence" -> "pipeline_manifest";
   "sequence" -> "window_api";
   "sequence" -> "engine_api";
+  "sequence" -> "config_gfx";
+  "sequence" -> "config_sim";
   "sequence" -> "vulkan_core";
   "sequence" -> "vulkan_core";
   "sequence" -> "memory";
@@ -15,6 +17,10 @@ digraph WeaverEngine {
   "sequence" -> "graphics_pipeline";
   "sequence" -> "renderer";
   "network" -> "ffi";
+  "raycast" -> "ffi";
+  "raycast" -> "vmath";
+  "raycast" -> "fixed_math";
+  "raycast" -> "config_sim";
   "engine_api" -> "ffi";
   "camera" -> "ffi";
   "camera" -> "math";
@@ -30,10 +36,6 @@ digraph WeaverEngine {
   "fsm_core" -> "network";
   "fsm_core" -> "bit";
   "fsm_core" -> "ffi";
-  "arena_manager" -> "ffi";
-  "arena_manager" -> "bit";
-  "arena_manager" -> "config_engine";
-  "arena_manager" -> "memory";
   "descriptors" -> "ffi";
   "descriptors" -> "bit";
   "descriptors" -> "registry_vk";
@@ -53,6 +55,7 @@ digraph WeaverEngine {
   "vulkan_core" -> "bit";
   "vulkan_core" -> "vulkan_headers";
   "vulkan_core" -> "registry_vk";
+  "vulkan_core" -> "engine_api";
   "renderer" -> "ffi";
   "renderer" -> "registry_vk";
   "dkjson" -> "debug";
@@ -68,9 +71,12 @@ digraph WeaverEngine {
   "render_queue" -> "bit";
   "render_queue" -> "fixed_math";
   "render_queue" -> "engine_api";
+  "render_queue" -> "config_gfx";
   "graphics_pipeline" -> "ffi";
   "graphics_pipeline" -> "bit";
   "graphics_pipeline" -> "registry_vk";
+  "input_core" -> "bit";
+  "input_core" -> "config_net";
   "net_pump" -> "ffi";
   "net_pump" -> "bit";
   "net_pump" -> "network";

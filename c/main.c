@@ -56,35 +56,45 @@ typedef pthread_t vmath_thread_t;
 #define CMD_IDLE 0
 #define CMD_BOOT_WINDOW 1
 #define CMD_KILL_WINDOW 2
+#define CMD_REBUILD_WSI 3 // ADDED: Phase 2 WSI Contract
+
 #define MAX_WINDOWS 4
 #define RING_SIZE 4
 #define TRANSFER_RING_SIZE 4
+
+// 1. Array of Structures (AoS) Tenant Layout
+typedef struct {
+    _Atomic(void*) vk_instance;
+    _Atomic(void*) vk_surface;
+    _Atomic int glfw_cmd;
+    _Atomic int glfw_arg_w;
+    _Atomic int glfw_arg_h;
+    _Atomic int last_key_pressed;
+    _Atomic uint32_t wasd_mask;
+    _Atomic float mouse_dx;
+    _Atomic float mouse_dy;
+    _Atomic float mouse_x;
+    _Atomic float mouse_y;
+    _Atomic int mouse_captured;
+    _Atomic int window_resized;
+    _Atomic int win_w;
+    _Atomic int win_h;
+    _Atomic float click_x;
+    _Atomic float click_y;
+    _Atomic int mouse_left;
+    _Atomic int mouse_right;
+    _Atomic int key_space;
+    uint8_t _pad[40]; // Pads struct to exactly 128 bytes (2 cache lines)
+} TenantMailbox;
+
+_Static_assert(sizeof(TenantMailbox) == 128, "TenantMailbox must prevent false sharing");
 
 typedef struct {
     alignas(64) _Atomic int ready_index;
     _Atomic int is_running;
     _Atomic int lua_finished;
     _Atomic int active_window;
-    _Atomic(void*) vk_instance[MAX_WINDOWS];
-    _Atomic(void*) vk_surface[MAX_WINDOWS];
-    _Atomic int glfw_cmd[MAX_WINDOWS];
-    _Atomic int glfw_arg_w[MAX_WINDOWS];
-    _Atomic int glfw_arg_h[MAX_WINDOWS];
-    _Atomic int last_key_pressed[MAX_WINDOWS];
-    _Atomic uint32_t wasd_mask[MAX_WINDOWS];
-    _Atomic float mouse_dx[MAX_WINDOWS];
-    _Atomic float mouse_dy[MAX_WINDOWS];
-    _Atomic float mouse_x[MAX_WINDOWS];
-    _Atomic float mouse_y[MAX_WINDOWS];
-    _Atomic int mouse_captured[MAX_WINDOWS];
-    _Atomic int window_resized[MAX_WINDOWS];
-    _Atomic int win_w[MAX_WINDOWS];
-    _Atomic int win_h[MAX_WINDOWS];
-    _Atomic float click_x[MAX_WINDOWS];
-    _Atomic float click_y[MAX_WINDOWS];
-    _Atomic int mouse_left[MAX_WINDOWS];
-    _Atomic int mouse_right[MAX_WINDOWS];
-    _Atomic int key_space[MAX_WINDOWS];
+    alignas(64) TenantMailbox tenants[MAX_WINDOWS]; // Isolated memory per window
 } IPC_Mailbox;
 
 typedef struct {
@@ -178,123 +188,133 @@ EXPORT void vx_sys_set_cmd(int win_id, int cmd, int w, int h) {
     S(g_engine.mailbox.glfw_cmd[win_id], cmd);
 }
 
+// 2. Update Initialization
 void vx_init_mailbox() {
     atomic_init(&g_engine.mailbox.ready_index, 0);
     atomic_init(&g_engine.mailbox.is_running, 1);
     atomic_init(&g_engine.mailbox.lua_finished, 0);
     atomic_init(&g_engine.mailbox.active_window, 0);
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        atomic_init(&g_engine.mailbox.vk_instance[i], NULL);
-        atomic_init(&g_engine.mailbox.vk_surface[i], NULL);
-        atomic_init(&g_engine.mailbox.glfw_cmd[i], CMD_IDLE);
-        atomic_init(&g_engine.mailbox.glfw_arg_w[i], 0);
-        atomic_init(&g_engine.mailbox.glfw_arg_h[i], 0);
-        atomic_init(&g_engine.mailbox.last_key_pressed[i], 0);
-        atomic_init(&g_engine.mailbox.wasd_mask[i], 0);
-        atomic_init(&g_engine.mailbox.mouse_dx[i], 0.0f);
-        atomic_init(&g_engine.mailbox.mouse_dy[i], 0.0f);
-        atomic_init(&g_engine.mailbox.mouse_x[i], 0.0f);
-        atomic_init(&g_engine.mailbox.mouse_y[i], 0.0f);
-        atomic_init(&g_engine.mailbox.click_x[i], -1.0f);
-        atomic_init(&g_engine.mailbox.click_y[i], -1.0f);
-        atomic_init(&g_engine.mailbox.mouse_left[i], 0);
-        atomic_init(&g_engine.mailbox.mouse_right[i], 0);
-        atomic_init(&g_engine.mailbox.mouse_captured[i], 0);
-        atomic_init(&g_engine.mailbox.window_resized[i], 0);
-        atomic_init(&g_engine.mailbox.win_w[i], 1280);
-        atomic_init(&g_engine.mailbox.win_h[i], 720);
-        atomic_init(&g_engine.mailbox.key_space[i], 0);
+        atomic_init(&g_engine.mailbox.tenants[i].vk_instance, NULL);
+        atomic_init(&g_engine.mailbox.tenants[i].vk_surface, NULL);
+        atomic_init(&g_engine.mailbox.tenants[i].glfw_cmd, CMD_IDLE);
+        atomic_init(&g_engine.mailbox.tenants[i].glfw_arg_w, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].glfw_arg_h, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].last_key_pressed, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].wasd_mask, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_dx, 0.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_dy, 0.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_x, 0.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_y, 0.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].click_x, -1.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].click_y, -1.0f);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_left, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_right, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].mouse_captured, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].window_resized, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].win_w, 1280);
+        atomic_init(&g_engine.mailbox.tenants[i].win_h, 720);
+        atomic_init(&g_engine.mailbox.tenants[i].key_space, 0);
     }
 }
 
 EXPORT int vx_input_last_key(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    return E_A(g_engine.mailbox.last_key_pressed[win_id], 0);
+    return E_A(g_engine.mailbox.tenants[win_id].last_key_pressed, 0);
 }
 
 EXPORT int vx_input_get_active_window() {
+    // active_window remains global across all tenants
     return L(g_engine.mailbox.active_window);
 }
 
 void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
-    S(g_engine.mailbox.mouse_x[id], (float)xpos);
-    S(g_engine.mailbox.mouse_y[id], (float)ypos);
+    
+    S(g_engine.mailbox.tenants[id].mouse_x, (float)xpos);
+    S(g_engine.mailbox.tenants[id].mouse_y, (float)ypos);
+    
     if (first_mouse[id]) {
         last_mx[id] = xpos;
         last_my[id] = ypos;
         first_mouse[id] = false;
     }
+    
     float dx = (float)(xpos - last_mx[id]);
     float dy = (float)(ypos - last_my[id]);
     last_mx[id] = xpos;
     last_my[id] = ypos;
+    
     while (TAS(s_mouse_lock)) { _mm_pause(); }
-    float current_dx = L_R(g_engine.mailbox.mouse_dx[id]);
-    S_R(g_engine.mailbox.mouse_dx[id], current_dx + dx);
-    float current_dy = L_R(g_engine.mailbox.mouse_dy[id]);
-    S_R(g_engine.mailbox.mouse_dy[id], current_dy + dy);
+    float current_dx = L_R(g_engine.mailbox.tenants[id].mouse_dx);
+    S_R(g_engine.mailbox.tenants[id].mouse_dx, current_dx + dx);
+    float current_dy = L_R(g_engine.mailbox.tenants[id].mouse_dy);
+    S_R(g_engine.mailbox.tenants[id].mouse_dy, current_dy + dy);
     CLR(s_mouse_lock);
 }
 
 void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
+    
     if (action == GLFW_PRESS) {
         S(g_engine.mailbox.active_window, id);
     }
+    
     if (button == GLFW_MOUSE_BUTTON_LEFT) {
         if (action == GLFW_PRESS) {
             double cx, cy;
             glfwGetCursorPos(window, &cx, &cy);
-            S(g_engine.mailbox.click_x[id], (float)cx);
-            S(g_engine.mailbox.click_y[id], (float)cy);
-            S(g_engine.mailbox.mouse_left[id], 1);
+            S(g_engine.mailbox.tenants[id].click_x, (float)cx);
+            S(g_engine.mailbox.tenants[id].click_y, (float)cy);
+            S(g_engine.mailbox.tenants[id].mouse_left, 1);
         } else {
-            S(g_engine.mailbox.mouse_left[id], 0);
+            S(g_engine.mailbox.tenants[id].mouse_left, 0);
         }
     } else if (button == GLFW_MOUSE_BUTTON_RIGHT) {
-        S(g_engine.mailbox.mouse_right[id], (action == GLFW_PRESS) ? 1 : 0);
+        S(g_engine.mailbox.tenants[id].mouse_right, (action == GLFW_PRESS) ? 1 : 0);
     }
 }
 
 EXPORT int vx_input_mouse_btn(int win_id, int btn) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    if (btn == 0) return L(g_engine.mailbox.mouse_left[win_id]);
-    if (btn == 1) return L(g_engine.mailbox.mouse_right[win_id]);
+    if (btn == 0) return L(g_engine.mailbox.tenants[win_id].mouse_left);
+    if (btn == 1) return L(g_engine.mailbox.tenants[win_id].mouse_right);
     return 0;
 }
 
 EXPORT float vx_input_mouse_x(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    return L(g_engine.mailbox.mouse_x[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].mouse_x);
 }
 
 EXPORT float vx_input_mouse_y(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    return L(g_engine.mailbox.mouse_y[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].mouse_y);
 }
 
 EXPORT float vx_input_click_x(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return -1.0f;
-    return L(g_engine.mailbox.click_x[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].click_x);
 }
 
 EXPORT float vx_input_click_y(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return -1.0f;
-    return L(g_engine.mailbox.click_y[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].click_y);
 }
 
 EXPORT int vx_input_is_captured(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    return L(g_engine.mailbox.mouse_captured[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].mouse_captured);
 }
 
 void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, int mods) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
     if (id < 0 || id >= MAX_WINDOWS) return;
+    
     S(g_engine.mailbox.active_window, id);
+    
     if (action == GLFW_PRESS || action == GLFW_RELEASE) {
         uint32_t bit = 0;
         if (key == GLFW_KEY_W) bit = 1;
@@ -303,20 +323,24 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, in
         else if (key == GLFW_KEY_D) bit = 8;
         else if (key == GLFW_KEY_E) bit = 16;
         else if (key == GLFW_KEY_Q) bit = 32;
+        
         if (bit) {
-            uint32_t mask = L(g_engine.mailbox.wasd_mask[id]);
+            uint32_t mask = L(g_engine.mailbox.tenants[id].wasd_mask);
             uint32_t new_mask;
             do {
                 new_mask = (action == GLFW_PRESS) ? (mask | bit) : (mask & ~bit);
-            } while(!CWX(g_engine.mailbox.wasd_mask[id], mask, new_mask));
+            } while(!CWX(g_engine.mailbox.tenants[id].wasd_mask, mask, new_mask));
         }
     }
+    
     if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-        S(g_engine.mailbox.last_key_pressed[id], GLFW_KEY_ESCAPE);
+        S(g_engine.mailbox.tenants[id].last_key_pressed, GLFW_KEY_ESCAPE);
     }
+    
     if (key == GLFW_KEY_SPACE) {
-        S(g_engine.mailbox.key_space[id], (action != GLFW_RELEASE) ? 1 : 0);
+        S(g_engine.mailbox.tenants[id].key_space, (action != GLFW_RELEASE) ? 1 : 0);
     }
+    
     if (key == GLFW_KEY_F11 && action == GLFW_PRESS) {
         if (!s_is_fullscreen[id]) {
             glfwGetWindowPos(window, &s_win_x[id], &s_win_y[id]);
@@ -332,10 +356,11 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, in
             printf("[C-CORE] Tenant %d: Windowed Mode Restored\n", id);
         }
     }
+    
     if (key == GLFW_KEY_F10 && action == GLFW_PRESS) {
-        int is_cap = L(g_engine.mailbox.mouse_captured[id]);
+        int is_cap = L(g_engine.mailbox.tenants[id].mouse_captured);
         is_cap = !is_cap;
-        S(g_engine.mailbox.mouse_captured[id], is_cap);
+        S(g_engine.mailbox.tenants[id].mouse_captured, is_cap);
         if (is_cap) {
             glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_CAPTURED);
             printf("[C-CORE] Tenant %d: Mouse Clamped to Window (F10)\n", id);
@@ -344,22 +369,23 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, in
             printf("[C-CORE] Tenant %d: Mouse Freed (F10)\n", id);
         }
     }
+    
     if (action == GLFW_PRESS) {
         if (key == GLFW_KEY_1 || key == GLFW_KEY_2 || key == GLFW_KEY_3 || key == GLFW_KEY_4 || key == GLFW_KEY_F5 || key == GLFW_KEY_ENTER || key == GLFW_KEY_KP_ENTER) {
-            S(g_engine.mailbox.last_key_pressed[id], key);
+            S(g_engine.mailbox.tenants[id].last_key_pressed, key);
         }
     }
 }
 
 EXPORT uint32_t vx_input_wasd(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    return L(g_engine.mailbox.wasd_mask[win_id]);
+    return L(g_engine.mailbox.tenants[win_id].wasd_mask);
 }
 
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
     while (TAS(s_mouse_lock)) { _mm_pause(); }
-    float val = E_R(g_engine.mailbox.mouse_dx[win_id], 0.0f);
+    float val = E_R(g_engine.mailbox.tenants[win_id].mouse_dx, 0.0f);
     CLR(s_mouse_lock);
     return val;
 }
@@ -367,14 +393,19 @@ EXPORT float vx_input_mouse_dx(int win_id) {
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
     while (TAS(s_mouse_lock)) { _mm_pause(); }
-    float val = E_R(g_engine.mailbox.mouse_dy[win_id], 0.0f);
+    float val = E_R(g_engine.mailbox.tenants[win_id].mouse_dy, 0.0f);
     CLR(s_mouse_lock);
     return val;
 }
 
-EXPORT int vx_sys_resize_flag(int win_id) {
+EXPORT int vx_input_spacebar(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    return E_A(g_engine.mailbox.window_resized[win_id], 0);
+    return L(g_engine.mailbox.tenants[win_id].key_space);
+}
+// PROPER NEW ADDITION
+EXPORT int vx_sys_get_resize_state(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
+    return atomic_load_explicit(&g_engine.mailbox.tenants[win_id].window_resized, memory_order_acquire);
 }
 
 EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
@@ -393,11 +424,6 @@ void glfw_framebuffer_size_callback(GLFWwindow* window, int width, int height) {
     S(g_engine.mailbox.win_w[id], width);
     S(g_engine.mailbox.win_h[id], height);
     S(g_engine.mailbox.window_resized[id], 1);
-}
-
-EXPORT int vx_input_spacebar(int win_id) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    return L(g_engine.mailbox.key_space[win_id]);
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
@@ -627,6 +653,11 @@ EXPORT void vx_stream_commit(int idx) {
 }
 
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p, DrawCommand* queue, uint32_t count, RenderThreadInit* win_wsi) {
+    // Redundant API boundary guard against minimized/0x0 viewports
+    if (p->width == 0 || p->height == 0) {
+        return;
+    }
+
     VkCommandBufferBeginInfo beginInfo = {
         .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
     };
@@ -758,18 +789,47 @@ THREAD_FUNC render_thread_loop(void* arg) {
     int local_read = -1;
 
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
+        
+        // --- PHASE 2 STATE MACHINE (NON-BLOCKING WSI TEARDOWN) ---
+        for (int w = 0; w < MAX_WINDOWS; w++) {
+            int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, memory_order_acquire);
+            if (cmd == CMD_REBUILD_WSI) {
+                RenderThreadInit* wsi = &g_window_wsi[w];
+                if (wsi->device) {
+                    vkDeviceWaitIdle(wsi->device);
+                }
+                
+                // Release the lock. Lua sees window_resized == 0 and resumes sending packets.
+                atomic_store_explicit(&g_engine.mailbox.tenants[w].window_resized, 0, memory_order_release);
+                atomic_store_explicit(&g_engine.mailbox.tenants[w].glfw_cmd, CMD_IDLE, memory_order_release);
+            }
+        }
+        // ---------------------------------------------------------
+
         int ready = L(g_ring.ready_idx);
         if (ready == -1 || ready == local_read) {
             SLEEP_MS(1);
             continue;
         }
+        
+        // --- DEFENSIVE GUARDS & ZERO-TRUST MULTIPLEXING ---
         local_read = ready;
         RenderPacket* p = &g_ring.packets[local_read];
         int wid = p->target_window_id;
+        
+        // Bounds Guard
         if (wid < 0 || wid >= MAX_WINDOWS || L(g_wsi_state[wid]) == 0) {
-            FA(g_ring.locked_mask, ~(1 << local_read));
+            FA(g_ring.locked_mask, ~(1u << local_read)); // Unlock ring slot
             continue;
         }
+
+        // 0x0 Topology Guard
+        if (p->width == 0 || p->height == 0) {
+            FA(g_ring.locked_mask, ~(1u << local_read)); // Unlock ring slot
+            continue;
+        }
+        // --------------------------------------------------
+
         S(g_render_busy[wid], 1);
 
         RenderThreadInit* win_wsi = &g_window_wsi[wid];
@@ -786,20 +846,23 @@ THREAD_FUNC render_thread_loop(void* arg) {
 
         int finished_slot = active_ring_slots[wid][current_frame];
         if (finished_slot != -1 && finished_slot != local_read) {
-            FA(g_ring.locked_mask, ~(1 << finished_slot));
+            FA(g_ring.locked_mask, ~(1u << finished_slot));
         }
         active_ring_slots[wid][current_frame] = local_read;
 
         PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
         uint32_t img_idx;
         VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain, 5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
+        
         if (res == VK_TIMEOUT || res == VK_NOT_READY) {
             S(g_render_busy[wid], 0);
             SLEEP_MS(1);
             continue;
         }
+        
+        // --- STALE SWAPCHAIN INTERCEPT (Triggers Phase 2 in Lua) ---
         if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-            S(g_engine.mailbox.window_resized[wid], 1);
+            S(g_engine.mailbox.tenants[wid].window_resized, 1); // UPDATED TO AoS
             S(g_render_busy[wid], 0);
             SLEEP_MS(10);
             continue;
@@ -810,6 +873,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
         p->swapchain_image = win_wsi->swapchain_images[img_idx];
         p->swapchain_view = win_wsi->swapchain_views[img_idx];
         vkResetCommandBuffer(cmd, 0);
+        
         vx_record_commands(cmd, p, p->draw_queue, p->draw_count, win_wsi);
 
         VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
