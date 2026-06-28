@@ -976,6 +976,26 @@ THREAD_FUNC render_thread_loop(void* arg) {
     return NULL;
 }
 
+EXPORT void vx_thread_start() {
+    S(g_render_thread_active, 1);
+    S(g_transfer_thread_active, 1);
+    g_render_thread = vmath_thread_start(render_thread_loop, NULL);
+    g_transfer_thread = vmath_thread_start(transfer_thread_loop, NULL);
+}
+
+THREAD_FUNC lua_co_overlord_loop(void* arg) {
+    printf("[LUA-OS-THREAD] Booting Lua VM...\n");
+    lua_State* L = luaL_newstate();
+    luaL_openlibs(L);
+    if (luaL_dofile(L, "main.lua") != LUA_OK) {
+        printf("\n[LUA FATAL ERROR] %s\n", lua_tostring(L, -1));
+        vx_core_shutdown();
+    }
+    lua_close(L);
+    printf("[LUA-OS-THREAD] VM Destroyed.\n");
+    return THREAD_RETURN_VAL;
+}
+
 EXPORT void vx_thread_kill() {
     S(g_render_thread_active, 0);
     S(g_transfer_thread_active, 0);
