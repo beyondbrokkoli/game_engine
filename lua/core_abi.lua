@@ -1,9 +1,7 @@
--- lua/core_abi.lua
 local ffi = require("ffi")
 
 ffi.cdef[[
 // C-Core Multi-Tenant Window & Input API
-
 void vx_sys_publish_instance(int win_id, void* instance);
 void vx_sys_set_cmd(int win_id, int cmd, int w, int h);
 void* vx_sys_get_surface(int win_id);
@@ -37,6 +35,7 @@ int vx_transfer_request(uint64_t src, uint64_t dst, uint64_t size, uint64_t t_se
 
 // --- NEW VULKAN MULTI-TENANT & VALIDATION API ---
 void vx_stream_allocate_tenant(int wid, void* wsi, uint32_t gfx_family, uint32_t transfer_family);
+// -- void vx_record_commands(void* cmd, void* p, void* queue, uint32_t count, void* win_wsi);
 const char** vx_sys_glfw_extensions(uint32_t* count);
 void vx_sys_inject_validation(void* instance_ptr);
 void vx_sys_eject_validation(void* instance);
