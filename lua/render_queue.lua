@@ -39,15 +39,19 @@ local function pack_pass(current_queue_ptr, pass_idx, pass_name, gfx, desc, tota
 end
 
 local function pure_pack_frame(tenant_ctx, write_idx, pc, rts_grid, vram_template, render_queues, active_render_mode, master_ptr, memory, gfx, desc, sc, total_tiles, net_identity)
-    local FRAME_BYTES = total_tiles * ffi.sizeof("RtsTileInstance")
-    local current_frame_offset = write_idx * FRAME_BYTES
-    pc.aos_current_idx = current_frame_offset / 4
+    local FRAME_BYTES = total_tiles * ffi.sizeof("RtsTileInstance");
+    local current_frame_offset = write_idx * FRAME_BYTES;
 
-    local gpu_ptr = ffi.cast("RtsTileInstance*", master_ptr + (current_frame_offset / 4))
+    -- 1. Correct for the Shader: The shader reads 4-byte words, so the offset / 4 is mathematically correct for the PushConstant.
+    pc.aos_current_idx = current_frame_offset / 4;
+
+    -- 2. Correct for the CPU: Force a 1-byte pointer scale, add the raw byte offset, then cast back to the struct.
+    local raw_byte_ptr = ffi.cast("uint8_t*", master_ptr) + current_frame_offset;
+    local gpu_ptr = ffi.cast("RtsTileInstance*", raw_byte_ptr);
 
     for i = 0, total_tiles - 1 do
-        local composite_elevation = 0
-        local active_terrain = 0
+        local composite_elevation = 0;
+        local active_terrain = 0;
 
         -- Fold all 8 player layers into a single visual tile
         for peer = 0, 7 do
