@@ -287,14 +287,18 @@ local function main()
 
             -- 2. The Asynchronous Handshake
             if tenant.suspended then
-                -- Wait! Do NOT destroy anything until the C-Core acknowledges the command.
-                -- The C-core sets resize_state to 0 ONLY after vkDeviceWaitIdle is complete.
                 if WindowAPI.get_resize_state(win_id) then
+                    -- [ANTI-DEADLOCK HAMMER]
+                    -- The user is still dragging and the OS is spamming resize events.
+                    -- Re-fire the command to force C-Core to acknowledge the LATEST dimensions!
+                    WindowAPI.trigger_wsi_rebuild(win_id)
                     goto continue_tenant
                 end
 
+                -- Once resize_state is cleanly 0, we have caught the final dimensions!
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
-                -- [FIXED TEARDOWN & REBUILD LOGIC FOR main.lua] --
+
+                -- [FIXED TEARDOWN & REBUILD LOGIC REMAINS EXACTLY THE SAME BELOW]
                 if new_w > 0 and new_h > 0 then
                     print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
                     tenant.width, tenant.height = new_w, new_h
