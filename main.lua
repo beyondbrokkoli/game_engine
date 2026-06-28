@@ -163,7 +163,8 @@ local function main()
     ffi.copy(index_ptr, iso_indices, 36 * 4)
 
     local MAX_DRAW_COMMANDS = 1024
-
+    -- Rename the game state to `sim_ctx` to violently enforce the separation.
+    local sim_ctx = ctx
     -- [ARMOR PATCH]: Anchor to sim_ctx to survive GC, and size by RING_SIZE (4)
     -- to prevent out-of-bounds pointer arithmetic when write_idx hits 3.
     sim_ctx.render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_net.RING_SIZE * 2)
@@ -214,9 +215,6 @@ local function main()
     print("[NET] Scene loaded. Cameras unlocked. Awaiting Timeline Synchronization...")
     local last_time = get_time_hires()
     local last_heartbeat = get_time_hires()
-
-    -- Rename the game state to `sim_ctx` to violently enforce the separation.
-    local sim_ctx = ctx
 
     -- 6. THE DETERMINISTIC RENDER LOOP
     while EngineAPI.is_running() do
