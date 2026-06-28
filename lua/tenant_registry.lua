@@ -23,7 +23,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
 
     -- 2. Allocate WSI & Sync Primitives per Tenant
     local sc = swapchain.Init(vk_rt.vk, vk_rt, width, height, nil, surface)
-    local sync = renderer.InitSync(vk_rt.vk, vk_rt.device, frame_slots)
+
+    -- [GOLDEN FIX]: Sync primitive count MUST match the hardware image count!
+    local sync = renderer.InitSync(vk_rt.vk, vk_rt.device, sc.imageCount)
 
     local wsi = ffi.new("RenderThreadInit")
     wsi.device = vk_rt.device
@@ -31,21 +33,20 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     wsi.transfer_queue = vk_rt.transferQueue
     wsi.swapchain = sc.handle
 
-    -- Tell the C-Core exactly how many padded sync frames it is allowed to modulo against
-    wsi.max_frames_in_flight = sync.safe_frames or frame_slots
+    -- Tell the C-Core to modulo the CPU frames exactly to the hardware capability
+    wsi.max_frames_in_flight = sc.imageCount
 
     for i = 0, sc.imageCount - 1 do
         wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
         wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
     end
 
-    -- [ARMOR PATCH]: Map all padded handles (safe_frames) across the FFI boundary
-    -- so the C-Core % 3 hardcode doesn't read a NULL pointer on frame index 2.
-    local safe_slots = sync.safe_frames or frame_slots;
-    for i = 0, safe_slots - 1 do
+    -- [ARMOR PATCH]: Map ALL hardware indices across the FFI boundary
+    -- so the C-Core never reads a NULL pointer when using img_idx!
+    for i = 0, sc.imageCount - 1 do
         wsi.image_available[i] = sync.imageAvailable[i];
         wsi.render_finished[i] = sync.renderFinished[i];
-        wsi.in_flight[i] = sync.inFlight[i];
+        wsi.in_flight[i]       = sync.inFlight[i];
     end
 
     -- FIX INJECTED: Populate required Dynamic Rendering and Sync function pointers

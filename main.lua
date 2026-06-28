@@ -319,7 +319,9 @@ local function main()
                     -- FIX 3: REBUILD - Pass the old handle to Init to maintain X11/Wayland surface association
                     tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
                     tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
-                    tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, cfg_gfx.cfg.frame_slots)
+
+                    -- [GOLDEN FIX]: Dynamically adapt sync primitives to the new OS-dictated imageCount
+                    tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
 
                     -- FIX 4: NOW destroy the old swapchain handle (mirroring the legacy stable sequence)
                     vk_rt.vk.vkDestroySwapchainKHR(vk_rt.device, old_sc_handle, nil)
@@ -330,16 +332,20 @@ local function main()
                     wsi.queue = vk_rt.queue
                     wsi.transfer_queue = vk_rt.transferQueue
                     wsi.swapchain = tenant.sc.handle
-                    wsi.max_frames_in_flight = tenant.sync.safe_frames
+
+                    -- Lock the C-core frame math to the new hardware size
+                    wsi.max_frames_in_flight = tenant.sc.imageCount
 
                     for i = 0, tenant.sc.imageCount - 1 do
                         wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
-                        wsi.swapchain_views[i] = ffi.cast("uint64_t", tenant.sc.imageViews[i])
+                        wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
                     end
-                    for i = 0, tenant.sync.safe_frames - 1 do
+
+                    -- [ARMOR PATCH]: Pack exact amount based on imageCount, NOT safe_frames
+                    for i = 0, tenant.sc.imageCount - 1 do
                         wsi.image_available[i] = tenant.sync.imageAvailable[i]
                         wsi.render_finished[i] = tenant.sync.renderFinished[i]
-                        wsi.in_flight[i] = tenant.sync.inFlight[i]
+                        wsi.in_flight[i]       = tenant.sync.inFlight[i]
                     end
 
                     local vk, dev = vk_rt.vk, vk_rt.device

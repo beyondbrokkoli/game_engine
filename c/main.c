@@ -969,17 +969,17 @@ THREAD_FUNC render_thread_loop(void* arg) {
             vx_record_commands(cmd, p, p->draw_queue, p->draw_count, win_wsi);
 
             VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+
+            // --- THE GOLDEN RECOVERY SNIPPET ---
             VkSubmitInfo submitInfo = {
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &win_wsi->image_available[current_frame],
+                .pWaitSemaphores = &win_wsi->image_available[current_frame], // CPU FRAME WAIT
                 .pWaitDstStageMask = &waitStage,
                 .commandBufferCount = 1,
                 .pCommandBuffers = &cmd,
                 .signalSemaphoreCount = 1,
-                // FIX: Sync to the CPU frame, not the GPU image index
-                // .pSignalSemaphores = &win_wsi->render_finished[current_frame]
-                .pSignalSemaphores = &win_wsi->render_finished[img_idx]
+                .pSignalSemaphores = &win_wsi->render_finished[img_idx]      // HARDWARE IMAGE SIGNAL
             };
 
             PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
@@ -988,11 +988,10 @@ THREAD_FUNC render_thread_loop(void* arg) {
             VkPresentInfoKHR presentInfo = {
                 .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .waitSemaphoreCount = 1,
-                // FIX: Sync to the CPU frame, not the GPU image index
-                .pWaitSemaphores = &win_wsi->render_finished[img_idx],
+                .pWaitSemaphores = &win_wsi->render_finished[img_idx],       // HARDWARE IMAGE WAIT
                 .swapchainCount = 1,
                 .pSwapchains = &win_wsi->swapchain,
-                .pImageIndices = &img_idx // (This remains img_idx, as required by presentation)
+                .pImageIndices = &img_idx
             };
 
             PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
