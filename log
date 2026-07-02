@@ -1,0 +1,4 @@
+[VULKAN LAYER ENFORCER]
+SEVERITY: 4096
+MESSAGE: vkQueueSubmit(): THREADING ERROR : object of type VkQueue is simultaneously used in current thread 7316 and thread 1832
+

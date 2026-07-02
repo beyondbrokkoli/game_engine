@@ -38,6 +38,9 @@ local TenantRegistry = require("tenant_registry")
 local graphics_mod = require("graphics_pipeline")
 local manifest = require("pipeline_manifest")
 
+local renderer_mod = require("renderer")
+local swapchain_mod = require("swapchain")
+
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
     if jit.os == "Windows" then ffi.C.Sleep(ms) else ffi.C.usleep(ms * 1000) end
@@ -421,10 +424,6 @@ local function main()
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
 
-                    local swapchain_mod = require("swapchain")
-                    local graphics_mod = require("graphics_pipeline")
-                    local renderer_mod = require("renderer")
-
                     graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
                     renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
 
@@ -512,9 +511,6 @@ local function main()
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
     -- [NEW]: 1. Cleanly burn down every active tenant's resources
-    local graphics_mod = require("graphics_pipeline")
-    local renderer_mod = require("renderer")
-    local swapchain_mod = require("swapchain")
 
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Tenant %d...", win_id))
