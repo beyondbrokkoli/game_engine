@@ -318,6 +318,49 @@ local function main()
             EngineAPI.shutdown()
         end
 
+        -- [NEW] OS Window Close Intercept & Dynamic Teardown
+        for win_id, tenant in pairs(TenantRegistry.active) do
+            if WindowAPI.close_requested(win_id) then
+                if win_id == 0 then
+                    -- The Master Tenant (0) dictates the engine lifecycle.
+                    print("[LUA IO] Primary Window 'X' clicked. Initiating Global Shutdown.")
+                    EngineAPI.shutdown()
+                else
+                    -- Cleanly burn down JUST this sub-tenant in real-time
+                    print(string.format("[TEARDOWN] OS 'X' clicked. Purging Sub-Tenant %d...", win_id))
+
+                    -- 1. Idling is critical: Make sure the GPU isn't rendering this tenant's swapchain right now
+                    vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
+
+                    -- 2. Destroy the active pipelines, swapchains, and sync primitives
+                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
+                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
+                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+
+                    -- 3. Explicitly destroy the surface in Lua
+                    local surface_ptr = WindowAPI.get_surface(win_id)
+                    if surface_ptr ~= nil then
+                        local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
+                        vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+                    end
+
+                    -- 4. Instruct the C-Core to finally execute the native GLFW window destruction
+                    WindowAPI.destroy(win_id)
+
+                    -- 5. Erase from the registry so the render loop stops ticking it
+                    TenantRegistry.active[win_id] = nil
+                end
+            end
+        end
+
+        -- 1. Get the single, authoritative focused window from the OS
+        local active_win_id = ffi.C.vx_input_get_active_window()
+
+        -- Engine Shutdown Hook (Fallback / Hotkey)
+        if active_win_id == 0 and WindowAPI.get_last_key(active_win_id) == cfg_gfx.key.esc then
+            EngineAPI.shutdown()
+        end
+
         -- 2. Clear mouse state for any window that DOES NOT have focus
         for win_id in pairs(TenantRegistry.active) do
             if win_id ~= active_win_id then

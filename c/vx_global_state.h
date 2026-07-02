@@ -98,7 +98,10 @@ typedef struct {
     _Atomic int     mouse_left;
     _Atomic int     mouse_right;
     _Atomic int     key_space;
-    uint8_t         _pad[40];
+    /* --> NEW: The polite request flag */
+    _Atomic int     close_requested;
+    /* --> UPDATED: Shrunk padding from 40 to 36 to maintain 128-byte size */
+    uint8_t         _pad[36];
 } TenantMailbox;
 
 _Static_assert(sizeof(TenantMailbox) == 128,
