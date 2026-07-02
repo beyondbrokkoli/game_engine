@@ -332,8 +332,12 @@ local function main()
                     -- Cleanly burn down JUST this sub-tenant in real-time
                     print(string.format("[TEARDOWN] OS 'X' clicked. Purging Sub-Tenant %d...", win_id))
 
-                    -- 1. Idling is critical: Make sure the GPU isn't rendering this tenant's swapchain right now
-                    vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
+                    -- 1. Surgical Teardown: Wait ONLY for this specific tenant's GPU work to finish
+                    for i = 0, tenant.sc.imageCount - 1 do
+                        if tenant.sync.inFlight[i] ~= nil then
+                            vk_rt.vk.vkWaitForFences(vk_rt.device, 1, tenant.sync.inFlight[i], true, 2000000000)
+                        end
+                    end
 
                     -- 2. Destroy the active pipelines, swapchains, and sync primitives
                     graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)

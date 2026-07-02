@@ -145,7 +145,15 @@ int main(int argc, char** argv) {
                 }
 
                 if (g_window_wsi[id].device) {
-                    vkDeviceWaitIdle(g_window_wsi[id].device);
+                    // [NEW] Surgical Teardown: Wait ONLY for this tenant's frames to finish
+                    PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)g_window_wsi[id].vkWaitForFences;
+                    if (pfnWait) {
+                        for (uint32_t f = 0; f < g_window_wsi[id].max_frames_in_flight; f++) {
+                            if (g_window_wsi[id].in_flight[f]) {
+                                pfnWait(g_window_wsi[id].device, 1, &g_window_wsi[id].in_flight[f], VK_TRUE, 2000000000);
+                            }
+                        }
+                    }
 
                     if (g_render_cmd_pools[id]) {
                         vkDestroyCommandPool(g_window_wsi[id].device,
