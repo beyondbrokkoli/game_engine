@@ -78,28 +78,29 @@ typedef pthread_t vmath_thread_t;
 /* ── Core Data Types ────────────────────────────────────────────── */
 
 typedef struct {
-    _Atomic(void*)  vk_instance;
-    _Atomic(void*)  vk_surface;
-    _Atomic int     glfw_cmd;
-    _Atomic int     glfw_arg_w;
-    _Atomic int     glfw_arg_h;
-    _Atomic int     last_key_pressed;
+    _Atomic(void*) vk_instance;
+    _Atomic(void*) vk_surface;
+    _Atomic int glfw_cmd;
+    _Atomic int glfw_arg_w;
+    _Atomic int glfw_arg_h;
+    _Atomic int last_key_pressed;
     _Atomic uint32_t wasd_mask;
-    _Atomic float   mouse_dx;
-    _Atomic float   mouse_dy;
-    _Atomic float   mouse_x;
-    _Atomic float   mouse_y;
-    _Atomic int     mouse_captured;
-    _Atomic int     window_resized;
-    _Atomic int     win_w;
-    _Atomic int     win_h;
-    _Atomic float   click_x;
-    _Atomic float   click_y;
-    _Atomic int     mouse_left;
-    _Atomic int     mouse_right;
-    _Atomic int     key_space;
-    _Atomic int     close_requested; /* The polite request flag */
-    uint8_t         _pad[36];        /* Pad down from 40 to 36 to stay at 128 bytes */
+    _Atomic float mouse_dx;
+    _Atomic float mouse_dy;
+    _Atomic float mouse_x;
+    _Atomic float mouse_y;
+    _Atomic int mouse_captured;
+    _Atomic int window_resized;
+    _Atomic int win_w;
+    _Atomic int win_h;
+    _Atomic float click_x;
+    _Atomic float click_y;
+    _Atomic int mouse_left;
+    _Atomic int mouse_right;
+    _Atomic int key_space;
+    _Atomic int close_requested;
+    _Atomic int teardown_complete; // <--- NEW: Deterministic detachment signal
+    uint8_t _pad[32];              // <--- ADJUSTED: 36 -> 32 to maintain 128 bytes
 } TenantMailbox;
 
 _Static_assert(sizeof(TenantMailbox) == 128,

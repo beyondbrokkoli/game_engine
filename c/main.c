@@ -127,48 +127,35 @@ int main(int argc, char** argv) {
                     }
                 }
 
-            /* ── KILL ───────────────────────────────────────────── */
+            // REPLACE the CMD_KILL_WINDOW block inside the main loop with this:
             } else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-
+                // 1. Prevent new render packets from being acquired for this tenant
                 S(g_wsi_state[id], 0);
 
-                int timeout = 2000;
-                while (L(g_render_busy[id])) {
+                // 2. Wait for the Render Thread to finish GPU synchronization and signal detachment
+                int timeout = 4000; // 4 second safety timeout
+                while (L(g_engine.mailbox.tenants[id].teardown_complete) == 0) {
                     SLEEP_MS(1);
                     timeout--;
                     if (timeout <= 0) {
-                        printf("[C-FATAL] Render thread failed to release "
-                               "busy flag for Tenant %d. "
-                               "Force overriding.\n", id);
+                        printf("[C-FATAL] Render thread failed to signal teardown_complete "
+                               "for Tenant %d. Force overriding.\n", id);
                         break;
                     }
                 }
 
+                // 3. Now it is 100% safe to destroy Vulkan objects and the OS window
                 if (g_window_wsi[id].device) {
-                    // [RESTORED] Surgical Teardown: Wait ONLY for this tenant's frames
-                    // Do NOT use vkDeviceWaitIdle here! It will crash the shared VkQueue.
-                    PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)g_window_wsi[id].vkWaitForFences;
-                    if (pfnWait) {
-                        for (uint32_t f = 0; f < g_window_wsi[id].max_frames_in_flight; f++) {
-                            if (g_window_wsi[id].in_flight[f]) {
-                                pfnWait(g_window_wsi[id].device, 1, &g_window_wsi[id].in_flight[f], VK_TRUE, 2000000000);
-                            }
-                        }
-                    }
-
                     if (g_render_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device,
-                            g_render_cmd_pools[id], NULL);
+                        vkDestroyCommandPool(g_window_wsi[id].device, g_render_cmd_pools[id], NULL);
                         g_render_cmd_pools[id] = VK_NULL_HANDLE;
                     }
                     if (g_transfer_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device,
-                            g_transfer_cmd_pools[id], NULL);
+                        vkDestroyCommandPool(g_window_wsi[id].device, g_transfer_cmd_pools[id], NULL);
                         g_transfer_cmd_pools[id] = VK_NULL_HANDLE;
                     }
                     if (g_transfer_fences[id]) {
-                        vkDestroyFence(g_window_wsi[id].device,
-                            g_transfer_fences[id], NULL);
+                        vkDestroyFence(g_window_wsi[id].device, g_transfer_fences[id], NULL);
                         g_transfer_fences[id] = VK_NULL_HANDLE;
                     }
                 }
@@ -176,6 +163,9 @@ int main(int argc, char** argv) {
                 glfwDestroyWindow(windows[id]);
                 windows[id] = NULL;
                 S(g_engine.mailbox.tenants[id].vk_surface, NULL);
+
+                // 4. Reset the signal for future tenant allocations
+                S(g_engine.mailbox.tenants[id].teardown_complete, 0);
 
                 printf("[C-CORE] Tenant %d Window & Explicit Allocations "
                        "Destroyed Safely.\n", id);

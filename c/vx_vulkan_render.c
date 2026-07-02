@@ -386,29 +386,54 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
 
 static THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
-
     uint32_t t_frame[MAX_WINDOWS] = {0};
-
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
+        for (int wid = 0; wid < MAX_WINDOWS; wid++) {
+            int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[wid].glfw_cmd, memory_order_acquire);
 
-        /* ── Handle pending WSI rebuilds ────────────────────────── */
-        for (int w = 0; w < MAX_WINDOWS; w++) {
-            int cmd = atomic_load_explicit(
-                &g_engine.mailbox.tenants[w].glfw_cmd,
-                memory_order_acquire);
+            // --- NEW: Granular Teardown & Detachment ---
+            if (cmd == CMD_KILL_WINDOW) {
+                RenderThreadInit* wsi = &g_window_wsi[wid];
+                if (wsi->device && wsi->vkWaitForFences) {
+                    PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)wsi->vkWaitForFences;
+
+                    // 1. Wait for all in-flight render frames to complete (Granular)
+                    for (uint32_t f = 0; f < wsi->max_frames_in_flight; f++) {
+                        if (wsi->in_flight[f]) {
+                            pfnWait(wsi->device, 1, &wsi->in_flight[f], VK_TRUE, 2000000000);
+                        }
+                    }
+                    // 2. Wait for the transfer fence to ensure transfer thread is detached
+                    if (g_transfer_fences[wid]) {
+                        pfnWait(wsi->device, 1, &g_transfer_fences[wid], VK_TRUE, 2000000000);
+                    }
+                }
+
+                // 3. Signal Lua that C-Core is fully detached and GPU is idle
+                S(g_engine.mailbox.tenants[wid].teardown_complete, 1);
+
+                // 4. Clear the command so we don't process it again
+                atomic_store_explicit(&g_engine.mailbox.tenants[wid].glfw_cmd, CMD_IDLE, memory_order_release);
+                continue;
+            }
 
             if (cmd == CMD_REBUILD_WSI) {
-                RenderThreadInit* wsi = &g_window_wsi[w];
-                if (wsi->device) {
-                    vkDeviceWaitIdle(wsi->device);
+                RenderThreadInit* wsi = &g_window_wsi[wid];
+                if (wsi->device && wsi->vkWaitForFences) {
+                    PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)wsi->vkWaitForFences;
+                    // Replaced vkDeviceWaitIdle with granular fence waiting
+                    for (uint32_t f = 0; f < wsi->max_frames_in_flight; f++) {
+                        if (wsi->in_flight[f]) {
+                            pfnWait(wsi->device, 1, &wsi->in_flight[f], VK_TRUE, 2000000000);
+                        }
+                    }
+                    if (g_transfer_fences[wid]) {
+                        pfnWait(wsi->device, 1, &g_transfer_fences[wid], VK_TRUE, 2000000000);
+                    }
                 }
-                S(g_wsi_state[w], 0);
-                atomic_store_explicit(
-                    &g_engine.mailbox.tenants[w].window_resized, 0,
-                    memory_order_release);
-                atomic_store_explicit(
-                    &g_engine.mailbox.tenants[w].glfw_cmd, CMD_IDLE,
-                    memory_order_release);
+                S(g_wsi_state[wid], 0);
+                atomic_store_explicit(&g_engine.mailbox.tenants[wid].window_resized, 0, memory_order_release);
+                atomic_store_explicit(&g_engine.mailbox.tenants[wid].glfw_cmd, CMD_IDLE, memory_order_release);
             }
         }
 

@@ -359,54 +359,18 @@ local function main()
 
         for win_id, tenant in pairs(TenantRegistry.active) do
 
-            -- [PHASE 3]: THE PURGE (Frame N+1)
-            if tenant.dying then
-                print(string.format("[TEARDOWN] Tenant %d: Executing Surgical Fence Wait...", win_id))
-
-                -- 1. MATHEMATICAL GUARANTEE: Wait for this specific tenant's GPU workload to finish
-                for i = 0, tenant.sync.safe_frames - 1 do
-                    if tenant.sync.inFlight[i] ~= nil then
-                        local fence_ptr = ffi.new("VkFence[1]", tenant.sync.inFlight[i])
-                        vk_rt.vk.vkWaitForFences(vk_rt.device, 1, fence_ptr, 1, 2000000000)
-                    end
-                end
-
-                -- 2. It is now 100% safe to dismantle Vulkan objects.
-                print(string.format("[TEARDOWN] Tenant %d: GPU idled. Purging Vulkan resources...", win_id))
-
-                graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
-                renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-                swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
-
-                local surface_ptr = WindowAPI.get_surface(win_id)
-                if surface_ptr ~= nil then
-                    local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
-                    vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
-                end
-
-                TenantRegistry.active[win_id] = nil
-                goto continue_tenant
-            end
-
-            -- [PHASE 1]: THE REQUEST (Frame N)
-            -- Check if the 'X' was clicked. If so, suspend Lua operations for
-            -- this tenant and ship the kill command to the C-Core mailbox.
             if WindowAPI.close_requested(win_id) then
-                -- Count how many tenants are currently alive in the registry
                 local active_count = 0
                 for _ in pairs(TenantRegistry.active) do
                     active_count = active_count + 1
                 end
 
                 if active_count <= 1 then
-                    -- The last one closes the door. Bring down the engine.
                     print("[LUA IO] Last active window closed. Initiating Global Shutdown.")
                     EngineAPI.shutdown()
                 else
-                    -- We have other windows surviving. Just close this specific sub-tenant.
-                    print(string.format("[TEARDOWN] Tenant %d close requested. Suspending Lua and notifying C-Core.", win_id))
-                    tenant.dying = true
-                    WindowAPI.destroy(win_id) -- Ships CMD_KILL_WINDOW to the mailbox
+                    print(string.format("[TEARDOWN] Tenant %d close requested. Delegating to Registry...", win_id))
+                    TenantRegistry.teardown_tenant(win_id, vk_rt)
                     goto continue_tenant
                 end
             end
@@ -423,7 +387,6 @@ local function main()
             end
 
             if tenant.suspended then
-            -- ... (Rest of your existing WSI rebuild and camera logic continues here) ...
                 if WindowAPI.get_resize_state(win_id) then
                     WindowAPI.trigger_wsi_rebuild(win_id)
                     goto continue_tenant
