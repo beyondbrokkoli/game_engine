@@ -1,17 +1,9 @@
+[TEARDOWN] Shutting down Vulkan Core...
+Validation Error: [ VUID-vkDestroyInstance-instance-00629 ] | MessageID = 0x8b3d8e18
+vkDestroyInstance(): Object Tracking - For VkInstance 0x1d51b8f2340, VkSurfaceKHR 0x750000000075 has not been destroyed.
+The Vulkan spec states: All child objects that were created with instance or with a VkPhysicalDevice retrieved from it, and that can be destroyed or freed, must have been destroyed or freed prior to destroying instance (https://docs.vulkan.org/spec/latest/chapters/initialization.html#VUID-vkDestroyInstance-instance-00629)
+Objects: 2
+    [0] VkInstance 0x1d51b8f2340
+    [1] VkSurfaceKHR 0x750000000075
 
-[VULKAN LAYER ENFORCER]
-SEVERITY: 4096
-MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x8e000000008e that is currently in use by VkCommandBuffer 0x14bf5e0f458.
-The Vulkan spec states: All submitted commands that refer to pipeline must have completed execution (https://docs.vulkan.org/spec/latest/chapters/pipelines.html#VUID-vkDestroyPipeline-pipeline-00765)
-
-
-[VULKAN LAYER ENFORCER]
-SEVERITY: 4096
-MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x8f000000008f that is currently in use by VkCommandBuffer 0x14bf5e0f458.
-The Vulkan spec states: All submitted commands that refer to pipeline must have completed execution (https://docs.vulkan.org/spec/latest/chapters/pipelines.html#VUID-vkDestroyPipeline-pipeline-00765)
-
-
-[VULKAN LAYER ENFORCER]
-SEVERITY: 4096
-MESSAGE: vkQueueSubmit(): THREADING ERROR : object of type VkQueue is simultaneously used in current thread 9968 and thread 2648
-
+[LUA IO] Teardown Complete. Safe Exit.
