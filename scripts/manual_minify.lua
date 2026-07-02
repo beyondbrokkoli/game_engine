@@ -80,9 +80,9 @@ print("--- AI SNAPSHOT ---")
 
 local order = {
     -- 1. C-CORE & HEADERS (Absolute Foundation)
-    "c/shared_structs.h",
+--    "c/shared_structs.h",
 --    "c/vx_net.c",
---    "c/main.c",
+    "c/main.c",
 
     -- 2. GLSL SHADERS & SSOT
 --    "glsl/shared.glsl",
@@ -94,25 +94,25 @@ local order = {
     -- Configs, low-level math, ABIs, headers
 --    "lua/config_net.lua",
 --    "lua/config_sim.lua",
-    "lua/config_gfx.lua",
+--    "lua/config_gfx.lua",
 --    "lua/fixed_math.lua",
 --    "lua/vmath.lua",
 --    "lua/vulkan_headers.lua",
-    "lua/core_abi.lua",
+--    "lua/core_abi.lua",
 --    "lua/pipeline_manifest.lua",
 --    "lua/dkjson.lua",
 
     -- 4. LUA LEVEL 1 (Base Bindings & Structs)
 --    "lua/registry_vk.lua",    -- Needs vulkan_headers
-    "lua/structs.lua",        -- Needs config_net
-    "lua/window_api.lua",     -- Needs core_abi
-    "lua/engine_api.lua",     -- Needs core_abi
+--    "lua/structs.lua",        -- Needs config_net
+--    "lua/window_api.lua",     -- Needs core_abi
+--    "lua/engine_api.lua",     -- Needs core_abi
 --    "lua/network.lua",        -- Needs FFI
 --    "lua/json_util.lua",      -- Needs dkjson
 
     -- 5. LUA LEVEL 2 (Vulkan Objects & Game Systems)
-    "lua/vulkan_core.lua",    -- Needs registry_vk, vulkan_headers
-    "lua/swapchain.lua",      -- Needs registry_vk
+--    "lua/vulkan_core.lua",    -- Needs registry_vk, vulkan_headers
+--    "lua/swapchain.lua",      -- Needs registry_vk
 --    "lua/memory.lua",         -- Needs registry_vk, config_sim
 --    "lua/descriptors.lua",    -- Needs registry_vk
 --    "lua/graphics_pipeline.lua", -- Needs registry_vk
@@ -121,16 +121,17 @@ local order = {
 --    "lua/camera.lua",         -- Needs vmath, window_api, config_gfx
 --    "lua/render_queue.lua",   -- Needs pipeline_manifest, fixed_math, engine_api
 --    "lua/net_pump.lua",       -- Needs network
+--    "lua/net_utils.lua",       -- Needs network
 --    "lua/fsm_core.lua",       -- Needs network
 --    "lua/game_state.lua",     -- Needs network, fixed_math
 --    "lua/registry_export.lua",-- Needs structs, config_gfx, config_sim, config_net, registry_vk
 
     -- 6. LUA LEVEL 3 (Orchestration)
-    "lua/sequence.lua",       -- Needs almost everything from Level 2
-    "lua/tenant_registry.lua",
+--    "lua/sequence.lua",       -- Needs almost everything from Level 2
+--    "lua/tenant_registry.lua",
     -- 7. ENTRY POINTS (Masters)
 --    "build.lua",
-    "main.lua",
+--    "main.lua",
 }
 
 for _, src in ipairs(order) do local f = io.open(src, "r") if f then

@@ -4,7 +4,7 @@
 | :--- | :--- | :--- |
 | **`F11`** | 🖥️ Fullscreen | Toggles between windowed and fullscreen display modes. |
 | **`F10`** | 🖱️ Edge Scroll | Toggles mouse clamping to the screen edge and activates edge-based view scrolling. |
-| **`F5`**  | 🔄 Hot-Reload | Rebuilds and applies shader pipelines instantly. |
+| **`Q/E`**  | 🔄 Zoom | 
 | **`1`** / **`2`** / **`3`** | 🎯 Render Modes | Toggles between Dual, Geometry, and Point rendering modes. |
 | **`ESC`** | 🛑 Teardown | Initiates a graceful, memory-safe engine shutdown. |
 

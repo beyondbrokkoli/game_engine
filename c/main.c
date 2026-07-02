@@ -171,6 +171,31 @@ static void vmath_thread_join(vmath_thread_t thread) {
     pthread_join(thread, NULL);
 }
 
+
+EXPORT void vx_sys_dump_ring_state(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return;
+
+    uint32_t mask = L_R(g_ring.locked_mask);
+    int ready = L_R(g_ring.ready_idx[win_id]);
+    int local = L_R(g_ring.local_read[win_id]);
+    int wsi = L_R(g_wsi_state[win_id]);
+
+    int offset = win_id * 4;
+    uint32_t tenant_mask = (mask >> offset) & 0xF; // Extract just the 4 bits for this tenant
+
+    printf("\n--- FREEZE AUTOPSY (Tenant %d) ---\n", win_id);
+    printf("WSI State  : %d\n", wsi);
+    printf("Ready Idx  : %d\n", ready);
+    printf("Local Read : %d\n", local);
+    printf("Slot Locks : [ %d | %d | %d | %d ]\n",
+        (tenant_mask & 1) != 0,
+        (tenant_mask & 2) != 0,
+        (tenant_mask & 4) != 0,
+        (tenant_mask & 8) != 0);
+    printf("----------------------------------\n");
+    fflush(stdout);
+}
+
 EXPORT int vx_core_is_running() {
     return L_R(g_engine.mailbox.is_running);
 }
@@ -275,12 +300,20 @@ void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     last_mx[id] = xpos;
     last_my[id] = ypos;
 
-    while (TAS(s_mouse_lock)) { _mm_pause(); }
+    // --- LOCK-FREE MOUSE DX ACCUMULATOR ---
     float current_dx = L_R(g_engine.mailbox.tenants[id].mouse_dx);
-    S_R(g_engine.mailbox.tenants[id].mouse_dx, current_dx + dx);
+    float new_dx;
+    do {
+        new_dx = current_dx + dx;
+        // CWX automatically updates current_dx to the latest value in memory if it fails
+    } while (!CWX(g_engine.mailbox.tenants[id].mouse_dx, current_dx, new_dx));
+
+    // --- LOCK-FREE MOUSE DY ACCUMULATOR ---
     float current_dy = L_R(g_engine.mailbox.tenants[id].mouse_dy);
-    S_R(g_engine.mailbox.tenants[id].mouse_dy, current_dy + dy);
-    CLR(s_mouse_lock);
+    float new_dy;
+    do {
+        new_dy = current_dy + dy;
+    } while (!CWX(g_engine.mailbox.tenants[id].mouse_dy, current_dy, new_dy));
 }
 
 void glfw_mouse_button_callback(GLFWwindow* window, int button, int action, int mods) {
@@ -404,6 +437,15 @@ void glfw_key_callback(GLFWwindow* window, int key, int scancode, int action, in
             S(g_engine.mailbox.tenants[id].last_key_pressed, key);
         }
     }
+
+    // ADD THIS HARDWIRED TRAP:
+    if (key == GLFW_KEY_F5 && action == GLFW_PRESS) {
+        printf("\n>>> NATIVE OS KEY INTERCEPT: F5 <<<\n");
+        for(int i = 0; i < MAX_WINDOWS; i++) {
+            vx_sys_dump_ring_state(i);
+        }
+        fflush(stdout);
+    }
 }
 
 EXPORT uint32_t vx_input_wasd(int win_id) {
@@ -413,18 +455,16 @@ EXPORT uint32_t vx_input_wasd(int win_id) {
 
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    while (TAS(s_mouse_lock)) { _mm_pause(); }
-    float val = E_R(g_engine.mailbox.tenants[win_id].mouse_dx, 0.0f);
-    CLR(s_mouse_lock);
-    return val;
+
+    // Atomically snatch the current delta and reset it to 0.0f. No locks required.
+    return E_R(g_engine.mailbox.tenants[win_id].mouse_dx, 0.0f);
 }
 
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    while (TAS(s_mouse_lock)) { _mm_pause(); }
-    float val = E_R(g_engine.mailbox.tenants[win_id].mouse_dy, 0.0f);
-    CLR(s_mouse_lock);
-    return val;
+
+    // Atomically snatch the current delta and reset it to 0.0f. No locks required.
+    return E_R(g_engine.mailbox.tenants[win_id].mouse_dy, 0.0f);
 }
 
 EXPORT int vx_input_spacebar(int win_id) {
@@ -896,11 +936,13 @@ THREAD_FUNC render_thread_loop(void* arg) {
             }
 
             int offset = wid * 4;
-
-            // Advance sequentially strictly within this tenant's 4-slot boundary
             int new_local_read;
+
             if (local_read_val == -1) {
-                new_local_read = ready;
+                // FIX: Never jump to 'ready'. Lua always starts writing at offset + 0
+                // after a reset. C must start at offset + 0 to process the backlog
+                // and retire the locks sequentially.
+                new_local_read = offset + 0;
             } else {
                 int curr_local = local_read_val - offset;
                 new_local_read = offset + ((curr_local + 1) % 4);
@@ -911,52 +953,51 @@ THREAD_FUNC render_thread_loop(void* arg) {
             int read_idx = new_local_read;
             RenderPacket* p = &g_ring.packets[read_idx];
 
-            // Safe-Guard: If WSI is suspended or viewport is dead, drop the packet
-            if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
-                FA(g_ring.locked_mask, ~(1u << read_idx));
-                continue;
-            }
-
             S(g_render_busy[wid], 1);
             RenderThreadInit* win_wsi = &g_window_wsi[wid];
 
-            // Clamp frame sync to static bounds
+            // 1. Clamp frame sync to static bounds
             uint32_t frame_slots = win_wsi->max_frames_in_flight > 0 ? win_wsi->max_frames_in_flight : 3;
             if (frame_slots > 3) frame_slots = 3;
-
             uint32_t current_frame = t_frame[wid] % frame_slots;
-            VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
 
-            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
-            VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
-
-            if (wait_res == VK_TIMEOUT) {
-                printf("[C-FATAL] Tenant %d: GPU Hang detected!\n", wid);
-                S(g_render_busy[wid], 0);
-                break;
-            }
-
-            // --- USE GLOBAL CACHE INSTEAD OF LOCAL ---
+            // 2. THE GOLDEN RULE: Always execute ring buffer accounting immediately!
             int finished_slot = g_ring.active_ring_slots[wid][current_frame];
             if (finished_slot != -1 && finished_slot != read_idx) {
                 FA(g_ring.locked_mask, ~(1u << finished_slot));
             }
             g_ring.active_ring_slots[wid][current_frame] = read_idx;
 
+            // 3. Safe-Guard: If WSI is suspended or viewport is dead, drop to bottom
+            if (L(g_wsi_state[wid]) == 0 || p->width == 0 || p->height == 0) {
+                goto frame_done;
+            }
+
+            VkCommandBuffer cmd = g_render_cmd_buffers[wid][current_frame];
+
+            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
+            VkResult wait_res = pfnWait(win_wsi->device, 1, &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
+
+            if (wait_res == VK_TIMEOUT) {
+                printf("[C-WARN] Tenant %d: GPU Fence Timeout (CPU Starvation). Dropping frame to maintain lock parity.\n", wid);
+                // TARGETED FIX: Route to unified frame exit.
+                // Bypasses rendering but ensures t_frame increments so the lock retirement
+                // logic can clear this slot on the next cycle.
+                goto frame_done;
+            }
+
             PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
             uint32_t img_idx;
             VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain, 5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
 
             if (res == VK_TIMEOUT || res == VK_NOT_READY) {
-                S(g_render_busy[wid], 0);
-                continue;
+                goto frame_done;
             }
 
             if (res == VK_ERROR_OUT_OF_DATE_KHR) {
                 S(g_engine.mailbox.tenants[wid].window_resized, 1);
-                S(g_render_busy[wid], 0);
                 SLEEP_MS(10);
-                continue;
+                goto frame_done;
             }
 
             PFN_vkResetFences pfnReset = (PFN_vkResetFences)win_wsi->vkResetFences;
@@ -970,16 +1011,15 @@ THREAD_FUNC render_thread_loop(void* arg) {
 
             VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
 
-            // --- THE GOLDEN RECOVERY SNIPPET ---
             VkSubmitInfo submitInfo = {
                 .sType = VK_STRUCTURE_TYPE_SUBMIT_INFO,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &win_wsi->image_available[current_frame], // CPU FRAME WAIT
+                .pWaitSemaphores = &win_wsi->image_available[current_frame],
                 .pWaitDstStageMask = &waitStage,
                 .commandBufferCount = 1,
                 .pCommandBuffers = &cmd,
                 .signalSemaphoreCount = 1,
-                .pSignalSemaphores = &win_wsi->render_finished[img_idx]      // HARDWARE IMAGE SIGNAL
+                .pSignalSemaphores = &win_wsi->render_finished[img_idx]
             };
 
             PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
@@ -988,7 +1028,7 @@ THREAD_FUNC render_thread_loop(void* arg) {
             VkPresentInfoKHR presentInfo = {
                 .sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores = &win_wsi->render_finished[img_idx],       // HARDWARE IMAGE WAIT
+                .pWaitSemaphores = &win_wsi->render_finished[img_idx],
                 .swapchainCount = 1,
                 .pSwapchains = &win_wsi->swapchain,
                 .pImageIndices = &img_idx
@@ -997,6 +1037,8 @@ THREAD_FUNC render_thread_loop(void* arg) {
             PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
             pfnPresent(win_wsi->queue, &presentInfo);
 
+            // 4. The unified exit point for both successful renders and dropped frames
+        frame_done:
             S(g_render_busy[wid], 0);
             t_frame[wid] = (current_frame + 1) % frame_slots;
         }

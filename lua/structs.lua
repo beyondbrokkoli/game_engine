@@ -125,7 +125,7 @@ M.specs = {
         }
     },
     {
-        name = "PlayerCommand", align = 1,
+        name = "PlayerCommand", align = 4, -- [!] PATCHED: Bumped from 1 to 4 to match C padding
         c_only = true, vk_shield = false, wire_format = true, force_align = true, glsl_std430 = false,
         members = {
             { type = "uint8_t", name = "opcode" },
@@ -178,9 +178,24 @@ M.specs = {
         c_only = true, vk_shield = false, wire_format = false, force_align = false, glsl_std430 = false,
         members = {
             { type = "uint16_t", name = "len" },
-            { type = "uint8_t", name = "data", count = 2048 }
+            { type = "uint8_t", name = "data", count = 4096 } -- [!] FIX: Matches C payload capacity
         }
-    }
+    },
+    {
+        name = "IcePunchPacket", align = 1,
+        c_only = true, vk_shield = false, wire_format = true, force_align = true, glsl_std430 = false,
+        members = {
+            { type = "uint64_t", name = "session_token" },
+            { type = "uint32_t", name = "frame_tick" },
+            { type = "uint32_t", name = "checksum_tick" },
+            { type = "uint32_t", name = "state_checksum" },
+            { type = "uint32_t", name = "base_tick" },
+            { type = "uint8_t", name = "player_id" },
+            { type = "uint8_t", name = "is_ping" }, -- Maps over the 'history_count' byte safely
+            { type = "uint16_t", name = "_align_pad" },
+            { type = "uint32_t", name = "padding", count = 3 } -- Pads the struct out to exactly 40 bytes
+        }
+    },
 }
 
 -- 2. THE LAYOUT COMPILER & INVARIANT ENFORCER

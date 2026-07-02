@@ -20,7 +20,7 @@ function Pump.init(app_ctx)
 
     -- 2. PERSISTENT BUFFERS (Safely scoped to this engine instance)
     -- Note: This requires 'structs.lua' to be loaded in main.lua prior to init.
-    local max_packet_size = 2048
+    local max_packet_size = 4096 -- [!] PATCHED: Expanded from 2048 to prevent RLE heap overflow
     local tx_buffer = ffi.new("uint8_t[?]", max_packet_size)
     local header_size = ffi.offsetof("LockstepPacket", "commands")
 
@@ -131,32 +131,46 @@ function Pump.init(app_ctx)
 
         intercept_network = function(ctx, current_tick)
             local count = net.RecvAll(global_in_buffer, MAX_BURST_PACKETS)
-
             for i = 0, count - 1 do
                 local rx_pkt = global_in_buffer[i]
                 local pkt = scratch_in_pkt
 
-                -- RLE DECOMPRESSION PASS
+                if rx_pkt.len < header_size then
+                    goto continue_inbox
+                end
+
+                -- Read header metadata
                 ffi.copy(pkt, rx_pkt.data, header_size)
 
-                local rx_offset = header_size
-                local cmd_index = 0
+                if pkt.history_count > HISTORY_LEN then
+                    goto continue_inbox
+                end
 
-                while rx_offset < rx_pkt.len and cmd_index < pkt.history_count do
+                local rx_offset = header_size
+                local decompressed_count = 0
+
+                -- RLE Decompression Loop
+                while (rx_offset + 17) <= rx_pkt.len and decompressed_count < pkt.history_count do
                     local run_count = rx_pkt.data[rx_offset]
                     local cmd_data = rx_pkt.data + rx_offset + 1
 
                     for r = 0, run_count - 1 do
-                        if cmd_index < pkt.history_count then
-                            ffi.copy(pkt.commands[cmd_index], cmd_data, 16)
-                            cmd_index = cmd_index + 1
+                        if decompressed_count < pkt.history_count then
+                            ffi.copy(pkt.commands[decompressed_count], cmd_data, 16)
+                            decompressed_count = decompressed_count + 1
                         end
                     end
                     rx_offset = rx_offset + 17
                 end
 
-                local pid = pkt.player_id
+                -- [!] CRITICAL DETERMINISM CHECK:
+                -- If the bytes on the wire didn't match the history claim, the packet was truncated.
+                -- Do NOT apply partial or zeroed data. Drop it and wait for the next frame's history recovery.
+                if decompressed_count < pkt.history_count then
+                    goto continue_inbox
+                end
 
+                local pid = pkt.player_id
                 if pid == ctx.net_identity then
                     goto continue_inbox
                 end
@@ -176,7 +190,6 @@ function Pump.init(app_ctx)
 
                     for h = 0, pkt.history_count - 1 do
                         local h_tick = pkt.base_tick + h
-
                         if h_tick > ctx.rollback_arena.confirmed_tick and h_tick >= window_start and h_tick <= window_end then
                             local h_idx = bit.band(h_tick, RING_MASK)
                             local h_frame = ctx.rollback_arena.frames[h_idx]
@@ -193,7 +206,7 @@ function Pump.init(app_ctx)
                             end
 
                             local inc_ptr = ffi.cast("uint64_t*", pkt.commands[h])
-                            local h_ptr   = ffi.cast("uint64_t*", h_frame.commands[pid])
+                            local h_ptr = ffi.cast("uint64_t*", h_frame.commands[pid])
 
                             if h_ptr[0] ~= inc_ptr[0] or h_ptr[1] ~= inc_ptr[1] then
                                 if h_tick < current_tick then
@@ -209,7 +222,6 @@ function Pump.init(app_ctx)
                     end
 
                     local payload_highest_tick = pkt.base_tick + pkt.history_count - 1
-
                     if pkt.base_tick <= ctx.peer_highest_tick[pid] + 1 then
                         if payload_highest_tick > ctx.peer_highest_tick[pid] then
                             ctx.peer_highest_tick[pid] = payload_highest_tick
@@ -219,13 +231,11 @@ function Pump.init(app_ctx)
                     if pkt.checksum_tick > 0 and pkt.checksum_tick >= math.max(0, ctx.rollback_arena.confirmed_tick - DESYNC_SWEEP) and pkt.checksum_tick <= current_tick then
                         local c_idx = bit.band(pkt.checksum_tick, RING_MASK)
                         local c_frame = ctx.rollback_arena.frames[c_idx]
-
                         if c_frame.tick == pkt.checksum_tick then
                             c_frame.remote_checksum = pkt.state_checksum
                         end
                     end
                 end
-
                 ::continue_inbox::
             end
         end

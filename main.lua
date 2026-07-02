@@ -12,7 +12,7 @@ local cfg_net = require("config_net")
 local WindowAPI = require("window_api")
 local EngineAPI = require("engine_api")
 
--- Master App Context (Read-Only Configs for Factories)
+-- Master App Context
 local app_ctx = {
     cfg_gfx = cfg_gfx,
     cfg_sim = cfg_sim,
@@ -64,9 +64,6 @@ end
 
 -- 4. BOOTSTRAP COROUTINE
 local function boot_weaver()
-    -- [PATCH]: Explicitly define win_id as 0 since the global is gone.
-    -- I also added old_swapchain = nil just to explicitly define the schema
-    -- before sequence.lua tries to read it in step 5.
     local boot_ctx = { win_id = 0, old_swapchain = nil }
 
     for i, stage in ipairs(seq.boot) do
@@ -92,8 +89,7 @@ local function main()
 
     assert(net.Host(local_port), "FATAL: Failed to bind local socket port " .. local_port)
 
-    -- Network topology handled cleanly via external module
-    local my_local_ip = "127.0.0.1"
+    local my_local_ip = NetUtils.get_local_ip()
     local session_token, local_id, p2p_established, active_peers, status_data = NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
 
     local ctx = {
@@ -112,6 +108,8 @@ local function main()
         snapshot_ring = ffi.new(string.format("%s[%d]", Game.GetStateName(), cfg_net.RING_SIZE))
     }
 
+    ffi.copy(ctx.snapshot_ring[0], ctx.rts_grid, Game.GetStateSize())
+
     for p = 0, cfg_net.MAX_PLAYERS - 1 do
         ctx.peer_active[p] = (p < #status_data.players)
     end
@@ -128,7 +126,7 @@ local function main()
     local vk_rt = engine_ctx.vk_runtime
     local sc = engine_ctx.sc_state
     local desc = engine_ctx.desc_state
-    local gfx = engine_ctx.gfx_state   -- <--- This is Tenant 0's Graphics State!
+    local gfx = engine_ctx.gfx_state
     local sync = engine_ctx.sync_state
     local memory = require("memory")
 
@@ -139,7 +137,7 @@ local function main()
     local TenantRegistry = require("tenant_registry")
     local camera_mod = require("camera")
 
-    -- 1. Adopt the Primary Tenant (Bootstrapped by Weaver Coroutine)
+    -- 1. Adopt the Primary Tenant
     TenantRegistry.active[0] = {
         win_id = 0,
         suspended = false,
@@ -147,10 +145,7 @@ local function main()
         height = cfg_gfx.win.h,
         sc = sc,
         sync = sync,
-
-        -- FIX INJECTED: You missed this line! Hand Tenant 0 its depth buffer.
         gfx = gfx,
-
         cam = camera_mod.new(),
         pc = ffi.new("PushConstants"),
         inv_vp = ffi.new("mat4_t")
@@ -159,15 +154,34 @@ local function main()
     TenantRegistry.active[0].pc.aos_prev_idx = 0
     TenantRegistry.active[0].pc.dt = 0.0
 
-    -- 2. Boot the Secondary Editor Tenant dynamically
+    -- 2. Boot the Secondary Editor Tenant
     TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
 
-    -- FIX APPLIED: Forging the isolated Depth Buffer & Pipeline state for Tenant 1!
     TenantRegistry.active[1].gfx = graphics_mod.Init(
         vk_rt.vk, vk_rt,
         800, 600,
         desc.pipelineLayout,
         TenantRegistry.active[1].sc.format,
+        manifest.graphics
+    )
+
+    -- 3. Boot Tenant 2
+    TenantRegistry.boot_tenant(vk_rt, 2, 800, 600, cfg_gfx.cfg.frame_slots)
+    TenantRegistry.active[2].gfx = graphics_mod.Init(
+        vk_rt.vk, vk_rt,
+        800, 600,
+        desc.pipelineLayout,
+        TenantRegistry.active[2].sc.format,
+        manifest.graphics
+    )
+
+    -- 4. Boot Tenant 3
+    TenantRegistry.boot_tenant(vk_rt, 3, 800, 600, cfg_gfx.cfg.frame_slots)
+    TenantRegistry.active[3].gfx = graphics_mod.Init(
+        vk_rt.vk, vk_rt,
+        800, 600,
+        desc.pipelineLayout,
+        TenantRegistry.active[3].sc.format,
         manifest.graphics
     )
 
@@ -183,25 +197,14 @@ local function main()
     ffi.copy(index_ptr, iso_indices, 36 * 4)
 
     local MAX_DRAW_COMMANDS = 1024
-    -- Rename the game state to `sim_ctx` to violently enforce the separation.
     local sim_ctx = ctx
-    -- [ARMOR PATCH]: Anchor to sim_ctx to survive GC, and size by RING_SIZE (4)
-    -- to prevent out-of-bounds pointer arithmetic when write_idx hits 3.
+
     sim_ctx.render_queues = ffi.new("DrawCommand[?]", MAX_DRAW_COMMANDS * cfg_net.RING_SIZE * 2)
     local render_queues = sim_ctx.render_queues
 
-    local frame_count = 0
-
-    -- [ANNIHILATED]: pc_primary, pc_editor, cam_primary, cam_editor, inv_vp_primary, inv_vp_editor.
-    -- These are now securely encapsulated within TenantRegistry.active[win_id].
-
     local total_time = 0.0
-    local wants_hotswap = false
     local master_ptr = ffi.cast("float*", memory.Mapped["MASTER_GPU_BLOCK"])
     local active_render_mode = cfg_gfx.mode.dual
-
-    -- [ANNIHILATED]: Global is_resizing, last_resize_time, and RESIZE_COOLDOWN.
-    -- WSI OS Interrupt state is now evaluated natively per-tenant inside the Orchestrator loop.
 
     local TICK_RATE = cfg_net.TICK_RATE
     local FIXED_DT = 1.0 / TICK_RATE
@@ -216,9 +219,10 @@ local function main()
     staging_ptr[52] = 1.0; staging_ptr[53] = 0.0; staging_ptr[54] = 0.0; staging_ptr[55] = 1.0
 
     local palette_job_id = memory.TransferAsync(0, "PALETTE_STAGING", "PALETTE_HAVEN", 16384)
-    local palette_ready = false
 
-    local prev_mouse_left = false
+    -- Upgrade prev_mouse_left to track per-tenant
+    --local prev_mouse_left = { [0] = false, [1] = false }
+    local prev_mouse_left = { [0] = false, [1] = false, [2] = false, [3] = false }
 
     local vram_template = ffi.new("RtsTileInstance[?]", ctx.total_tiles)
     for z = 0, cfg_sim.world.map_height - 1 do
@@ -229,76 +233,146 @@ local function main()
         end
     end
 
-    local gfx_pipeline_module = require("graphics_pipeline")
-    local pump_deletion_queue = gfx_pipeline_module.PumpDeletionQueue
+    local function execute_heartbeat_diagnostic(ctx)
+        local RING_MASK = cfg_net.RING_MASK
+        local MAX_PLAYERS = cfg_net.MAX_PLAYERS
+
+        -- Scan the unconfirmed horizon for discrepancies
+        local start_tick = ctx.rollback_arena.confirmed_tick + 1
+        local end_tick = ctx.rollback_arena.head_tick
+
+        for t = start_tick, end_tick do
+            local idx = bit.band(t, RING_MASK)
+            local frame = ctx.rollback_arena.frames[idx]
+
+            -- Check if we have received a validation hash from a remote peer for this historical tick
+            if frame.tick == t and frame.remote_checksum ~= 0 and frame.state_checksum ~= 0 then
+                if frame.state_checksum ~= frame.remote_checksum then
+                    print("\n!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    print(string.format("[CRITICAL DESYNC DETECTED] Tick: %d | Slot: %d", t, idx))
+                    print(string.format("  Local Hash:  0x%08X", frame.state_checksum))
+                    print(string.format("  Remote Hash: 0x%08X (Verified by Peer ID: %d)", frame.remote_checksum, frame.remote_peer_id))
+                    print("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!")
+                    print("DUMPING TIMELINE INPUT MATRIX FOR CORRUPTED TICK:")
+
+                    for p = 0, MAX_PLAYERS - 1 do
+                        print(string.format("  Player [%d]:", p))
+                        for c = 0, 1 do
+                            local cmd = frame.commands[p][c]
+                            print(string.format("    Command [%d] -> Opcode: %d | Flags: %d | TargetPos: %d",
+                                c, cmd.opcode, cmd.flags, cmd.target_pos))
+                        end
+                    end
+                    print("--------------------------------------------------------------")
+                    print("[FATAL INVARIANT] Halting engine loop to preserve memory state.")
+                    -- Force a clean crash to let you inspect logs
+                    error("[DESYNC] Memory boundary desynchronized across target environments.")
+                end
+            end
+        end
+    end
 
     print("[NET] Scene loaded. Cameras unlocked. Awaiting Timeline Synchronization...")
     local last_time = get_time_hires()
-    local last_heartbeat = get_time_hires()
+    local last_heartbeat = get_time_hires() -- [!] Restored from legacy build
 
-    -- 6. THE DETERMINISTIC RENDER LOOP
     while EngineAPI.is_running() do
         local current_time = get_time_hires()
         local frame_time = math.max(0.001, math.min(current_time - last_time, 0.25))
         last_time = current_time
 
-        -- A. DETERMINISTIC SIMULATION PHASE (The Headless Truth)
+        -- A. DETERMINISTIC SIMULATION PHASE
         sim_ctx.accumulator = sim_ctx.accumulator + frame_time
         sim_ctx.net_accumulator = sim_ctx.net_accumulator + frame_time
 
         Pump.intercept_network(sim_ctx, sim_ctx.sim_tick_count)
         FSM.tick_playing_state(sim_ctx, FIXED_DT)
 
+        -- [!] INJECTED: The Desync Trap (Checks every single frame for hash divergence)
+        execute_heartbeat_diagnostic(sim_ctx)
+
         if sim_ctx.net_accumulator >= FIXED_DT then
             Pump.send_dynamic_history(sim_ctx)
             sim_ctx.net_accumulator = sim_ctx.net_accumulator % FIXED_DT
         end
 
-        -- Simulation Input Routing (Only route if Window 0 is focused and clicked)
-        if WindowAPI.is_mouse_down(0, 0) and not prev_mouse_left then
-            local click_x, click_y = WindowAPI.get_click_pos(0)
-            local primary_tenant = TenantRegistry.active[0]
-            local clicked_idx = Raycast.matrix_raycast_terrain(
-                click_x, click_y,
-                primary_tenant.width, primary_tenant.height,
-                primary_tenant.inv_vp,
-                sim_ctx.rts_grid, sim_ctx.net_identity
-            )
-            if clicked_idx ~= 65535 then
-                InputCore.SubmitCommand(sim_ctx, 1, 0, 0, clicked_idx)
+        -- [!] INJECTED: The Golden Diagnostic Pulse (Fires every 1.0 real-time seconds)
+        if current_time - last_heartbeat >= 1.0 then
+            last_heartbeat = current_time
+            print(string.format("\n[HEARTBEAT] Sim Tick: %d | Confirmed: %d | Accum: %.4f",
+                sim_ctx.sim_tick_count, sim_ctx.rollback_arena.confirmed_tick, sim_ctx.accumulator))
+
+            for p = 0, cfg_net.MAX_PLAYERS - 1 do
+                if sim_ctx.peer_active[p] then
+                    print(string.format("  -> [DIAGNOSTIC] Peer %d | Highest Tick: %d | AckOfMe: %d",
+                        p, sim_ctx.peer_highest_tick[p], sim_ctx.peer_ack_of_me[p]))
+                end
             end
         end
-        prev_mouse_left = WindowAPI.is_mouse_down(0, 0)
 
-        -- B. MULTI-TENANT ORCHESTRATION PHASE (The Visuals)
-        total_time = total_time + frame_time
-
-        -- Determine which window actually has OS focus so we don't spin both cameras at once
+        -- 1. Get the single, authoritative focused window from the OS
         local active_win_id = ffi.C.vx_input_get_active_window()
+
+        -- Engine Shutdown Hook
+        if active_win_id >= 0 and WindowAPI.get_last_key(active_win_id) == cfg_gfx.key.esc then
+            EngineAPI.shutdown()
+        end
+
+        -- 2. Clear mouse state for any window that DOES NOT have focus
+        for win_id in pairs(TenantRegistry.active) do
+            if win_id ~= active_win_id then
+                prev_mouse_left[win_id] = false
+            end
+        end
+
+        -- 3. Only process input for the definitively active window
+        if active_win_id >= 0 and TenantRegistry.active[active_win_id] then
+            local tenant = TenantRegistry.active[active_win_id]
+            local is_down = WindowAPI.is_mouse_down(active_win_id, 0)
+
+            if is_down and not prev_mouse_left[active_win_id] then
+                local click_x, click_y = WindowAPI.get_click_pos(active_win_id)
+
+                -- UNIFIED ROUTER: Both windows interact with the same 2.5D RTS Grid!
+                -- The raycast uses the specific window's isolated camera matrix and resolution.
+                local clicked_idx = Raycast.matrix_raycast_terrain(
+                    click_x, click_y,
+                    tenant.width, tenant.height,
+                    tenant.inv_vp,
+                    sim_ctx.rts_grid, sim_ctx.net_identity
+                )
+
+                if clicked_idx ~= 65535 then
+                    InputCore.HandleTerrainClick(sim_ctx, clicked_idx)
+                    print(string.format("[INPUT] Window %d clicked tile %d", active_win_id, clicked_idx))
+                end
+            end
+
+            prev_mouse_left[active_win_id] = is_down
+        end
+
+        -- B. MULTI-TENANT ORCHESTRATION PHASE
+        total_time = total_time + frame_time
 
         for win_id, tenant in pairs(TenantRegistry.active) do
 
-            -- 1. Trigger the WSI Rebuild command and suspend Lua tracking
+            if WindowAPI.is_key_down(win_id, cfg_gfx.key.f5) then
+                ffi.C.vx_sys_dump_ring_state(win_id)
+            end
             if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
                 WindowAPI.trigger_wsi_rebuild(win_id)
                 tenant.suspended = true
                 goto continue_tenant
             end
 
-            -- 2. The Asynchronous Handshake
             if tenant.suspended then
                 if WindowAPI.get_resize_state(win_id) then
-                    -- [ANTI-DEADLOCK HAMMER]
-                    -- The user is still dragging and the OS is spamming resize events.
-                    -- Re-fire the command to force C-Core to acknowledge the LATEST dimensions!
                     WindowAPI.trigger_wsi_rebuild(win_id)
                     goto continue_tenant
                 end
 
-                -- Once resize_state is cleanly 0, we have caught the final dimensions!
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
 
-                -- [FIXED TEARDOWN & REBUILD LOGIC REMAINS EXACTLY THE SAME BELOW]
                 if new_w > 0 and new_h > 0 then
                     print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
                     tenant.width, tenant.height = new_w, new_h
@@ -308,36 +382,27 @@ local function main()
                     local graphics_mod = require("graphics_pipeline")
                     local renderer_mod = require("renderer")
 
-                    -- FIX 1: Destroy the correct tenant graphics state, not the global 'gfx' variable!
                     graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
                     renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
 
-                    -- FIX 2: Preserve the old swapchain handle BEFORE destruction
                     local old_sc_handle = tenant.sc.handle
 
-                    -- Destroy only the image views of the old swapchain now
                     for i = 0, tenant.sc.imageCount - 1 do
                         vk_rt.vk.vkDestroyImageView(vk_rt.device, tenant.sc.imageViews[i], nil)
                     end
 
-                    -- FIX 3: REBUILD - Pass the old handle to Init to maintain X11/Wayland surface association
                     tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
                     tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
 
-                    -- [GOLDEN FIX]: Dynamically adapt sync primitives to the new OS-dictated imageCount
                     tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
 
-                    -- FIX 4: NOW destroy the old swapchain handle (mirroring the legacy stable sequence)
                     vk_rt.vk.vkDestroySwapchainKHR(vk_rt.device, old_sc_handle, nil)
 
-                    -- C. Safely reconstruct the RenderThreadInit struct for the C-Core
                     local wsi = ffi.new("RenderThreadInit")
                     wsi.device = vk_rt.device
                     wsi.queue = vk_rt.queue
                     wsi.transfer_queue = vk_rt.transferQueue
                     wsi.swapchain = tenant.sc.handle
-
-                    -- Lock the C-core frame math to the new hardware size
                     wsi.max_frames_in_flight = tenant.sc.imageCount
 
                     for i = 0, tenant.sc.imageCount - 1 do
@@ -345,7 +410,6 @@ local function main()
                         wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
                     end
 
-                    -- [ARMOR PATCH]: Pack exact amount based on imageCount, NOT safe_frames
                     for i = 0, tenant.sc.imageCount - 1 do
                         wsi.image_available[i] = tenant.sync.imageAvailable[i]
                         wsi.render_finished[i] = tenant.sync.renderFinished[i]
@@ -367,15 +431,12 @@ local function main()
                     wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
                     wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
 
-                    -- Resume multiplexer streaming
                     EngineAPI.init_stream(win_id, wsi);
                     print(string.format("[LUA CO] Tenant %d: WSI Stream Resumed.", win_id))
                 end
                 goto continue_tenant
             end
 
-            -- 2. Input Isolation & Camera Update
-            -- Only update the camera if this specific tenant's window is active
             if win_id == active_win_id then
                 local mouse_x, mouse_y = WindowAPI.get_mouse_pos(win_id)
                 camera_mod.update(tenant.cam, frame_time, mouse_x, mouse_y, tenant.width, tenant.height, win_id)
@@ -383,7 +444,6 @@ local function main()
 
             camera_mod.get_matrices(tenant.cam, tenant.width, tenant.height, tenant.pc.viewProj, tenant.inv_vp)
 
-            -- Pass the win_id to strictly acquire from this tenant's partitioned 4-slot chunk
             local write_idx = EngineAPI.acquire_render_packet(win_id)
             if write_idx == -1 then
                 goto continue_tenant
@@ -392,12 +452,10 @@ local function main()
             tenant.pc.total_time = total_time
             tenant.pc.dt = sim_ctx.accumulator / FIXED_DT
 
-            -- FIX APPLIED: Using 'tenant.gfx' to prevent Depth Buffer collision!
             render_queue.PackFrame(tenant, write_idx, tenant.pc, sim_ctx.rts_grid, vram_template,
                 render_queues, active_render_mode, master_ptr, memory,
                 tenant.gfx, desc, tenant.sc, sim_ctx.total_tiles, sim_ctx.net_identity)
 
-            -- Commit back to this specific tenant's queue
             EngineAPI.commit_render_packet(win_id, write_idx)
 
             ::continue_tenant::
@@ -410,11 +468,35 @@ local function main()
     EngineAPI.kill_thread()
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
-    require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, gfx)
+    -- [NEW]: 1. Cleanly burn down every active tenant's resources
+    local graphics_mod = require("graphics_pipeline")
+    local renderer_mod = require("renderer")
+    local swapchain_mod = require("swapchain")
+
+    for win_id, tenant in pairs(TenantRegistry.active) do
+        print(string.format("[TEARDOWN] Purging Tenant %d...", win_id))
+
+        -- Destroy the active pipelines, swapchains, and sync primitives
+        graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
+        renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
+        swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+
+        -- [THE FINAL FIX]: Explicitly destroy the surface in Lua
+        local surface_ptr = WindowAPI.get_surface(win_id)
+        if surface_ptr ~= nil then
+            local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
+            vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+        end
+
+        -- NOW instruct the C-Core to destroy the GLFW OS window
+        WindowAPI.destroy(win_id)
+    end
+
+    -- 2. Destroy the Global / Shared Engine State
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
-    require("swapchain").Destroy(vk_rt.vk, vk_rt, sc)
-    require("renderer").Destroy(vk_rt.vk, vk_rt.device, sync)
+
+    -- [DELETED]: The old global gfx, sc, and sync destroy calls were removed from here!
 
     memory.DestroyBuffer("MASTER_GPU_BLOCK", vk_rt)
     memory.DestroyBuffer("MASTER_INDEX_BLOCK", vk_rt)
@@ -424,6 +506,7 @@ local function main()
     net.Shutdown()
     memory.DestroyTransferSubsystem(vk_rt)
 
+    -- 3. Shut down the core Vulkan Instance and Device
     require("vulkan_core").Destroy(vk_rt, cfg_gfx.cfg)
     print("[LUA IO] Teardown Complete. Safe Exit.")
 end

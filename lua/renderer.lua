@@ -38,7 +38,10 @@ end
 
 function Renderer.Destroy(vk, device, sync)
     print("[TEARDOWN] Dismantling Renderer Sync Objects...")
-    vk.vkDeviceWaitIdle(device)
+
+    -- DELETE THIS LINE: vk.vkDeviceWaitIdle(device)
+    -- The C-core already idled the device safely on the Render Thread!
+
     if not sync then return end
 
     -- Use the padded count for safe teardown

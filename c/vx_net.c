@@ -189,23 +189,25 @@ EXPORT void vx_net_send_to(void* data, size_t len, uint8_t target_peer) {
            g_net.peers[target_peer].addr_len);
 }
 
-// Drains the OS UDP buffer directly into Lua's FFI memory block
 EXPORT int vx_net_recv_all(RxPacket* out_buffer, int max_count) {
     if (g_net.sock == NET_INVALID || !out_buffer) return 0;
-
     struct sockaddr_in from;
     socklen_t from_len = sizeof(from);
     int count = 0;
 
     while (count < max_count) {
-        ssize_t recvd = recvfrom(g_net.sock, (char*)out_buffer[count].data, 2048, 0, (struct sockaddr*)&from, &from_len);
+        // [!] FIX: Expand ingestion limit to 4096 to prevent OS-level truncation
+        ssize_t recvd = recvfrom(g_net.sock,
+                                 (char*)out_buffer[count].data,
+                                 4096,
+                                 0,
+                                 (struct sockaddr*)&from,
+                                 &from_len);
+
         if (recvd < 0) break;
 
-        // At minimum, it must contain the base Lockstep headers to be valid
         if (recvd >= 36) {
-            // Cast the raw data to easily read the headers!
             LockstepPacket* header = (LockstepPacket*)out_buffer[count].data;
-
             if (header->session_token != g_net.session_token) continue;
 
             uint8_t pid = header->player_id;
@@ -214,6 +216,8 @@ EXPORT int vx_net_recv_all(RxPacket* out_buffer, int max_count) {
                 g_net.peers[pid].addr_len = from_len;
                 g_net.peers[pid].active = 1;
             }
+
+            // Dynamically assign the actual bytes written into the ring buffer
             out_buffer[count].len = (uint16_t)recvd;
             count++;
         }

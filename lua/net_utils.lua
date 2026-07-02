@@ -3,6 +3,7 @@ local ffi = require("ffi")
 local json_util = require("json_util")
 local cfg_net = require("config_net")
 local net = require("network")
+local NetUtils = {}
 
 -- 1. DUPLICATE THE OS TIMERS HERE
 local function sys_sleep(ms)
@@ -55,7 +56,7 @@ local function http_get(url)
     return res
 end
 
-function get_local_ip()
+function NetUtils.get_local_ip()
     local cmd = ""
     if jit.os == "Windows" then
         cmd = 'powershell -Command "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { $_.IPAddress -notlike \'127.*\' -and $_.IPAddress -notlike \'169.254.*\' } | Select-Object -First 1).IPAddress"'
@@ -87,7 +88,6 @@ local function extract_true_64bit_token(json_string)
 end
 
 -- 3. THE EXPORTED MODULE
-local NetUtils = {}
 function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     print(string.format("[STUN] Querying external NAT edges at %s:%d...", cfg_net.STUN_SERVER, cfg_net.STUN_PORT))
     local stun_ok, my_pub_ip, my_pub_port = net.StunPunch(cfg_net.STUN_SERVER, cfg_net.STUN_PORT)
@@ -191,23 +191,21 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     if real_time_remaining > 0 then
         print(string.format("[ICE] Quorum locked. Initiating Mutual Handshake for %.2f seconds...", real_time_remaining))
 
-        -- [!] REVERTED: Grab the full struct size to bypass NAT micro-packet drops
-        local full_packet_size = ffi.sizeof("LockstepPacket")
-        local scratch_handshake = ffi.new("LockstepPacket")
+        -- [!] The Consensus: Using our lightweight 40-byte Trojan struct
+        local ice_packet_size = ffi.sizeof("IcePunchPacket")
         local handshake_buffer = ffi.new("RxPacket[32]")
-
+        local scratch_ice = ffi.new("IcePunchPacket")
         local p2p_heard = {}
 
         while (get_time_hires() - sync_start_time) < real_time_remaining do
             for peer_id, active in pairs(active_peers) do
                 if active and not p2p_established[peer_id] then
-                    local ping_pkt = ffi.new("LockstepPacket")
+                    local ping_pkt = ffi.new("IcePunchPacket")
                     ping_pkt.session_token = session_token
                     ping_pkt.player_id = local_id
-                    ping_pkt.frame_tick = p2p_heard[peer_id] and 1 or 0
+                    ping_pkt.is_ping = p2p_heard[peer_id] and 1 or 0
 
-                    -- [!] REVERTED: Blasting the full payload size
-                    net.SendTo(ping_pkt, full_packet_size, peer_id)
+                    net.SendTo(ping_pkt, ice_packet_size, peer_id)
                 end
             end
 
@@ -215,15 +213,18 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
             for i = 0, count - 1 do
                 local rx_pkt = handshake_buffer[i]
 
-                -- [!] REVERTED: Safely copy only the bytes we actually received off the wire
-                ffi.copy(scratch_handshake, rx_pkt.data, rx_pkt.len)
+                -- Ensure it's big enough before copying to avoid FFI boundary violations
+                if rx_pkt.len >= ice_packet_size then
+                    ffi.copy(scratch_ice, rx_pkt.data, ice_packet_size)
 
-                if scratch_handshake.session_token == session_token then
-                    local sender = scratch_handshake.player_id
-                    p2p_heard[sender] = true
-                    if scratch_handshake.frame_tick >= 1 and not p2p_established[sender] then
-                        p2p_established[sender] = true
-                        print(string.format("[ICE] Mutual P2P Punch-Through SUCCESS for Node %d!", sender))
+                    if scratch_ice.session_token == session_token then
+                        local sender = scratch_ice.player_id
+                        p2p_heard[sender] = true
+
+                        if scratch_ice.is_ping >= 1 and not p2p_established[sender] then
+                            p2p_established[sender] = true
+                            print(string.format("[ICE] Mutual P2P Punch-Through SUCCESS for Node %d!", sender))
+                        end
                     end
                 end
             end
@@ -245,14 +246,13 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     net.SetRelayIP(cfg_net.RELAY_IP)
     net.Connect(cfg_net.MAX_PLAYERS, cfg_net.RELAY_IP, cfg_net.RELAY_PORT)
 
-    local reg_pkt = ffi.new("LockstepPacket")
+    local reg_pkt = ffi.new("IcePunchPacket")
     reg_pkt.session_token = session_token
     reg_pkt.player_id = local_id
-    reg_pkt.frame_tick = 0
+    reg_pkt.is_ping = 0
 
-    -- [!] REVERTED: Ensure the relay receives a structurally complete packet
-    local full_packet_size = ffi.sizeof("LockstepPacket")
-    net.SendTo(reg_pkt, full_packet_size, cfg_net.MAX_PLAYERS)
+    local ice_packet_size = ffi.sizeof("IcePunchPacket")
+    net.SendTo(reg_pkt, ice_packet_size, cfg_net.MAX_PLAYERS)
 
     print("[SYSTEM] All routes bound. Drop-in complete.")
     return session_token, local_id, p2p_established, active_peers, status_data

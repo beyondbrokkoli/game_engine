@@ -73,8 +73,6 @@ function core.finalize_device_and_swapchain(vk_state, surface_ptr, req_extension
     print("[LUA] Resuming Vulkan Setup. Finalizing Logical Device...")
     local vk = vk_state.vk
     local instance = vk_state.instance
-    local surface = ffi.cast("VkSurfaceKHR", surface_ptr)
-    vk_state.surface = surface
 
     local pDeviceCount = ffi.new("uint32_t[1]")
     vk.vkEnumeratePhysicalDevices(instance, pDeviceCount, nil)
@@ -192,7 +190,7 @@ function core.Destroy(vk_state, gfx_cfg)
     print("[TEARDOWN] Shutting down Vulkan Core...")
     local vk = vk_state.vk
     if vk_state.device ~= nil then vk.vkDestroyDevice(vk_state.device, nil) end
-    if vk_state.surface ~= nil then vk.vkDestroySurfaceKHR(vk_state.instance, vk_state.surface, nil) end
+    -- [DELETED]: The legacy surface destroy is gone.
     if vk_state.instance ~= nil then
         if gfx_cfg.use_validation == 1 then EngineAPI.eject_validation(vk_state.instance) end
         vk.vkDestroyInstance(vk_state.instance, nil)

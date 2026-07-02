@@ -159,6 +159,20 @@ typedef struct __attribute__((aligned(64))) {
 
 typedef struct  {
     uint16_t len;
-    uint8_t data[2048];
+    uint8_t data[4096];
 } RxPacket;
+
+#pragma pack(push, 1)
+typedef struct {
+    uint64_t session_token;
+    uint32_t frame_tick;
+    uint32_t checksum_tick;
+    uint32_t state_checksum;
+    uint32_t base_tick;
+    uint8_t player_id;
+    uint8_t is_ping;
+    uint16_t _align_pad;
+    uint32_t padding[3];
+} IcePunchPacket;
+#pragma pack(pop)
 
