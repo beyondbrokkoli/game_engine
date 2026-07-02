@@ -38,6 +38,9 @@ local TenantRegistry = require("tenant_registry")
 local graphics_mod = require("graphics_pipeline")
 local manifest = require("pipeline_manifest")
 
+local renderer_mod = require("renderer")
+local swapchain_mod = require("swapchain")
+
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
     if jit.os == "Windows" then ffi.C.Sleep(ms) else ffi.C.usleep(ms * 1000) end
@@ -357,28 +360,30 @@ local function main()
         for win_id, tenant in pairs(TenantRegistry.active) do
 
             -- [PHASE 3]: THE PURGE (Frame N+1)
-            -- If the tenant was marked 'dying' in a previous frame, the C-Core
-            -- has already processed CMD_KILL_WINDOW, waited for native idle,
-            -- and closed the GLFW window. It is now 100% mathematically safe
-            -- to destroy Vulkan objects in Lua.
             if tenant.dying then
-                print(string.format("[TEARDOWN] Tenant %d: C-Core idled. Purging Vulkan resources...", win_id))
-                local graphics_mod = require("graphics_pipeline")
-                local renderer_mod = require("renderer")
-                local swapchain_mod = require("swapchain")
+                print(string.format("[TEARDOWN] Tenant %d: Executing Surgical Fence Wait...", win_id))
+
+                -- 1. MATHEMATICAL GUARANTEE: Wait for this specific tenant's GPU workload to finish
+                for i = 0, tenant.sync.safe_frames - 1 do
+                    if tenant.sync.inFlight[i] ~= nil then
+                        local fence_ptr = ffi.new("VkFence[1]", tenant.sync.inFlight[i])
+                        vk_rt.vk.vkWaitForFences(vk_rt.device, 1, fence_ptr, 1, 2000000000)
+                    end
+                end
+
+                -- 2. It is now 100% safe to dismantle Vulkan objects.
+                print(string.format("[TEARDOWN] Tenant %d: GPU idled. Purging Vulkan resources...", win_id))
 
                 graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
                 renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
                 swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
-                -- Explicitly destroy the surface in Lua
                 local surface_ptr = WindowAPI.get_surface(win_id)
                 if surface_ptr ~= nil then
                     local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
                     vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
                 end
 
-                -- Erase from the registry so it is completely ignored next frame
                 TenantRegistry.active[win_id] = nil
                 goto continue_tenant
             end
