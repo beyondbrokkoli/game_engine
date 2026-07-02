@@ -392,10 +392,18 @@ local function main()
             -- Check if the 'X' was clicked. If so, suspend Lua operations for
             -- this tenant and ship the kill command to the C-Core mailbox.
             if WindowAPI.close_requested(win_id) then
-                if win_id == 0 then
-                    -- If the primary window is closed, bring down the whole engine
+                -- Count how many tenants are currently alive in the registry
+                local active_count = 0
+                for _ in pairs(TenantRegistry.active) do
+                    active_count = active_count + 1
+                end
+
+                if active_count <= 1 then
+                    -- The last one closes the door. Bring down the engine.
+                    print("[LUA IO] Last active window closed. Initiating Global Shutdown.")
                     EngineAPI.shutdown()
                 else
+                    -- We have other windows surviving. Just close this specific sub-tenant.
                     print(string.format("[TEARDOWN] Tenant %d close requested. Suspending Lua and notifying C-Core.", win_id))
                     tenant.dying = true
                     WindowAPI.destroy(win_id) -- Ships CMD_KILL_WINDOW to the mailbox
