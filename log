@@ -1,8 +1,5 @@
-MESSAGE: vkDestroyCommandPool(): (VkCommandBuffer 0x23cc8504368) is in use.
-The Vulkan spec states: All VkCommandBuffer objects allocated from commandPool must not be in the pending state (https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#VUID-vkDestroyCommandPool-commandPool-00041)
-
+[C-FATAL] Render thread failed to signal teardown_complete for Tenant 3. Force overriding.
 
 [VULKAN LAYER ENFORCER]
 SEVERITY: 4096
-MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x1f000000001f that is currently in use by VkQueue 0x23cc0b34328.
-The Vulkan spec states: All submitted batches that refer to semaphore must 
+MESSAGE: vkDestroyCommandPool(): (VkCommandBuffer 0x1e351645b88) is in use.
