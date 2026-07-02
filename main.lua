@@ -335,7 +335,11 @@ local function main()
                     -- 1. Surgical Teardown: Wait ONLY for this specific tenant's GPU work to finish
                     for i = 0, tenant.sc.imageCount - 1 do
                         if tenant.sync.inFlight[i] ~= nil then
-                            vk_rt.vk.vkWaitForFences(vk_rt.device, 1, tenant.sync.inFlight[i], true, 2000000000)
+                            -- Construct a 1-element C-array to satisfy the const VkFence* pFences signature
+                            local fence_ptr = ffi.new("VkFence[1]", tenant.sync.inFlight[i])
+
+                            -- Pass the array pointer, and use 1 for VK_TRUE
+                            vk_rt.vk.vkWaitForFences(vk_rt.device, 1, fence_ptr, 1, 2000000000)
                         end
                     end
 
