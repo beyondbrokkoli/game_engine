@@ -69,7 +69,8 @@ EXPORT void vx_init_mailbox(void) {
         atomic_init(&g_engine.mailbox.tenants[i].window_resized, 0);
         atomic_init(&g_engine.mailbox.tenants[i].win_w,          1280);
         atomic_init(&g_engine.mailbox.tenants[i].win_h,          720);
-        atomic_init(&g_engine.mailbox.tenants[i].key_space,      0);
+        atomic_init(&g_engine.mailbox.tenants[i].key_space, 0);
+        atomic_init(&g_engine.mailbox.tenants[i].close_requested, 0); /* Initialize it */
     }
 
     /* Strict C11 Atomic Initializations */

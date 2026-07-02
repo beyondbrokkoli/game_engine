@@ -174,8 +174,10 @@ int main(int argc, char** argv) {
 
             /* ── Close-request intercept (all tenants) ──────────── */
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
-                S(g_engine.mailbox.tenants[id].last_key_pressed,
-                  GLFW_KEY_ESCAPE);
+                // Signal Lua that this tenant wants to die
+                S(g_engine.mailbox.tenants[id].close_requested, 1);
+
+                // Veto the OS close request. Lua and the Multiplexer will tear it down natively later.
                 glfwSetWindowShouldClose(windows[id], GLFW_FALSE);
             }
         }

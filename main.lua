@@ -356,9 +356,53 @@ local function main()
 
         for win_id, tenant in pairs(TenantRegistry.active) do
 
+            -- [PHASE 3]: THE PURGE (Frame N+1)
+            -- If the tenant was marked 'dying' in a previous frame, the C-Core
+            -- has already processed CMD_KILL_WINDOW, waited for native idle,
+            -- and closed the GLFW window. It is now 100% mathematically safe
+            -- to destroy Vulkan objects in Lua.
+            if tenant.dying then
+                print(string.format("[TEARDOWN] Tenant %d: C-Core idled. Purging Vulkan resources...", win_id))
+                local graphics_mod = require("graphics_pipeline")
+                local renderer_mod = require("renderer")
+                local swapchain_mod = require("swapchain")
+
+                graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
+                renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
+                swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+
+                -- Explicitly destroy the surface in Lua
+                local surface_ptr = WindowAPI.get_surface(win_id)
+                if surface_ptr ~= nil then
+                    local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
+                    vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+                end
+
+                -- Erase from the registry so it is completely ignored next frame
+                TenantRegistry.active[win_id] = nil
+                goto continue_tenant
+            end
+
+            -- [PHASE 1]: THE REQUEST (Frame N)
+            -- Check if the 'X' was clicked. If so, suspend Lua operations for
+            -- this tenant and ship the kill command to the C-Core mailbox.
+            if WindowAPI.close_requested(win_id) then
+                if win_id == 0 then
+                    -- If the primary window is closed, bring down the whole engine
+                    EngineAPI.shutdown()
+                else
+                    print(string.format("[TEARDOWN] Tenant %d close requested. Suspending Lua and notifying C-Core.", win_id))
+                    tenant.dying = true
+                    WindowAPI.destroy(win_id) -- Ships CMD_KILL_WINDOW to the mailbox
+                    goto continue_tenant
+                end
+            end
+
+            -- STANDARD TENANT ORCHESTRATION (Resizes, Inputs, Rendering)
             if WindowAPI.is_key_down(win_id, cfg_gfx.key.f5) then
                 ffi.C.vx_sys_dump_ring_state(win_id)
             end
+
             if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
                 WindowAPI.trigger_wsi_rebuild(win_id)
                 tenant.suspended = true
@@ -366,6 +410,7 @@ local function main()
             end
 
             if tenant.suspended then
+            -- ... (Rest of your existing WSI rebuild and camera logic continues here) ...
                 if WindowAPI.get_resize_state(win_id) then
                     WindowAPI.trigger_wsi_rebuild(win_id)
                     goto continue_tenant

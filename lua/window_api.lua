@@ -21,12 +21,15 @@ end
 function WindowAPI.destroy(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 2, 0, 0)
 end
--- Replace WindowAPI.was_resized with:
+
 function WindowAPI.get_resize_state(win_id)
     return ffi.C.vx_sys_get_resize_state(win_id) == 1
 end
 
--- Add this new helper to trigger Phase 2 rebuild
+function WindowAPI.close_requested(win_id)
+    return ffi.C.vx_sys_close_requested(win_id) == 1
+end
+
 function WindowAPI.trigger_wsi_rebuild(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0) -- 3 = CMD_REBUILD_WSI
 end
