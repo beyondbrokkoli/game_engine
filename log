@@ -1,9 +1,57 @@
-[TEARDOWN] Shutting down Vulkan Core...
-Validation Error: [ VUID-vkDestroyInstance-instance-00629 ] | MessageID = 0x8b3d8e18
-vkDestroyInstance(): Object Tracking - For VkInstance 0x1d51b8f2340, VkSurfaceKHR 0x750000000075 has not been destroyed.
-The Vulkan spec states: All child objects that were created with instance or with a VkPhysicalDevice retrieved from it, and that can be destroyed or freed, must have been destroyed or freed prior to destroying instance (https://docs.vulkan.org/spec/latest/chapters/initialization.html#VUID-vkDestroyInstance-instance-00629)
-Objects: 2
-    [0] VkInstance 0x1d51b8f2340
-    [1] VkSurfaceKHR 0x750000000075
 
-[LUA IO] Teardown Complete. Safe Exit.
+[HEARTBEAT] Sim Tick: 843 | Confirmed: 837 | Accum: 0.0164
+  -> [DIAGNOSTIC] Peer 0 | Highest Tick: 837 | AckOfMe: 842
+  -> [DIAGNOSTIC] Peer 1 | Highest Tick: 0 | AckOfMe: 0
+[TEARDOWN] Tenant 2 close requested. Suspending Lua and notifying C-Core.
+[TEARDOWN] Tenant 2: Executing Surgical Fence Wait...
+[TEARDOWN] Tenant 2: GPU idled. Purging Vulkan resources...
+[TEARDOWN] Destroying Graphics Pipelines, Depth Buffer & ID Buffer...
+[TEARDOWN] Dismantling Renderer Sync Objects...
+
+[VULKAN LAYER ENFORCER]
+SEVERITY: 4096
+MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x690000000069 that is currently in use by VkQueue 0x196efab53c8.
+The Vulkan spec states: All submitted batches that refer to semaphore must have completed execution (https://docs.vulkan.org/spec/latest/chapters/synchronization.html#VUID-vkDestroySemaphore-semaphore-05149)
+
+[TEARDOWN] Destroying Swapchain & Image Views...
+[C-CORE] Tenant 2 Window & Explicit Allocations Destroyed Safely.
+
+[HEARTBEAT] Sim Tick: 904 | Confirmed: 897 | Accum: 0.0010
+
+[SKIPPING HEARTBEAT LOGS]
+
+[HEARTBEAT] Sim Tick: 1384 | Confirmed: 1378 | Accum: 0.0161
+  -> [DIAGNOSTIC] Peer 0 | Highest Tick: 1378 | AckOfMe: 1382
+  -> [DIAGNOSTIC] Peer 1 | Highest Tick: 0 | AckOfMe: 0
+[TEARDOWN] Tenant 1 close requested. Suspending Lua and notifying C-Core.
+[TEARDOWN] Tenant 1: Executing Surgical Fence Wait...
+[TEARDOWN] Tenant 1: GPU idled. Purging Vulkan resources...
+[TEARDOWN] Destroying Graphics Pipelines, Depth Buffer & ID Buffer...
+[TEARDOWN] Dismantling Renderer Sync Objects...
+
+[VULKAN LAYER ENFORCER]
+SEVERITY: 4096
+MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x4b000000004b that is currently in use by VkQueue 0x196efab53c8.
+The Vulkan spec states: All submitted batches that refer to semaphore must have completed execution (https://docs.vulkan.org/spec/latest/chapters/synchronization.html#VUID-vkDestroySemaphore-semaphore-05149)
+
+[TEARDOWN] Destroying Swapchain & Image Views...
+[C-CORE] Tenant 1 Window & Explicit Allocations Destroyed Safely.
+
+[HEARTBEAT] Sim Tick: 1445 | Confirmed: 1438 | Accum: 0.0042
+  -> [DIAGNOSTIC] Peer 0 | Highest Tick: 1438 | AckOfMe: 1443
+
+[SKIPPING HEARTBEAT LOGS]
+
+[HEARTBEAT] Sim Tick: 1866 | Confirmed: 1859 | Accum: 0.0008
+  -> [DIAGNOSTIC] Peer 0 | Highest Tick: 1859 | AckOfMe: 1864
+  -> [DIAGNOSTIC] Peer 1 | Highest Tick: 0 | AckOfMe: 0
+[TEARDOWN] Tenant 0 close requested. Suspending Lua and notifying C-Core.
+
+[VULKAN LAYER ENFORCER]
+SEVERITY: 4096
+MESSAGE: vkDestroyCommandPool(): (VkCommandBuffer 0x196f7492958) is in use.
+The Vulkan spec states: All VkCommandBuffer objects allocated from commandPool must not be in the pending state (https://docs.vulkan.org/spec/latest/chapters/cmdbuffers.html#VUID-vkDestroyCommandPool-commandPool-00041)
+
+[TEARDOWN] Tenant 0: Executing Surgical Fence Wait...
+Segmentation fault         bin/boot.exe
+
