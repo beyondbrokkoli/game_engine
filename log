@@ -1,4 +1,5 @@
-[VULKAN LAYER ENFORCER]
-SEVERITY: 4096
-MESSAGE: vkQueueSubmit(): THREADING ERROR : object of type VkQueue is simultaneously used in current thread 7316 and thread 1832
+[LUA FATAL ERROR] main.lua:338: bad argument #3 to 'vkWaitForFences' (cannot convert 'struct VkFence_T *' to 'struct VkFence_T *const *')
+[C-CORE] Async Transfer Thread gracefully terminated.
 
+[C-CORE] Shutdown triggered. Waiting for Lua VM...
+Segmentation fault         bin/boot.exe
