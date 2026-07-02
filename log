@@ -55,3 +55,32 @@ The Vulkan spec states: All VkCommandBuffer objects allocated from commandPool m
 [TEARDOWN] Tenant 0: Executing Surgical Fence Wait...
 Segmentation fault         bin/boot.exe
 
+
+
+
+MEANWHILE AT THE END OF THE OTHER WINDOWS LOG
+[TEARDOWN] Shutting down Vulkan Core...
+Validation Error: [ VUID-vkDestroyInstance-instance-00629 ] | MessageID = 0x8b3d8e18
+vkDestroyInstance(): Object Tracking - For VkInstance 0x2ad1a76ac30, VkSurfaceKHR 0x20000000002 has not been destroyed.
+The Vulkan spec states: All child objects that were created with instance or with a VkPhysicalDevice retrieved from it, and that can be destroyed or freed, must have been destroyed or freed prior to destroying instance (https://docs.vulkan.org/spec/latest/chapters/initialization.html#VUID-vkDestroyInstance-instance-00629)
+Objects: 2
+    [0] VkInstance 0x2ad1a76ac30
+    [1] VkSurfaceKHR 0x20000000002
+
+Validation Error: [ VUID-vkDestroyInstance-instance-00629 ] | MessageID = 0x8b3d8e18
+vkDestroyInstance(): Object Tracking - For VkInstance 0x2ad1a76ac30, VkSurfaceKHR 0x750000000075 has not been destroyed.
+The Vulkan spec states: All child objects that were created with instance or with a VkPhysicalDevice retrieved from it, and that can be destroyed or freed, must have been destroyed or freed prior to destroying instance (https://docs.vulkan.org/spec/latest/chapters/initialization.html#VUID-vkDestroyInstance-instance-00629)
+Objects: 2
+    [0] VkInstance 0x2ad1a76ac30
+    [1] VkSurfaceKHR 0x750000000075
+
+Validation Error: [ VUID-vkDestroyInstance-instance-00629 ] | MessageID = 0x8b3d8e18
+vkDestroyInstance(): Object Tracking - For VkInstance 0x2ad1a76ac30, VkSurfaceKHR 0x5a000000005a has not been destroyed.
+The Vulkan spec states: All child objects that were created with instance or with a VkPhysicalDevice retrieved from it, and that can be destroyed or freed, must have been destroyed or freed prior to destroying instance (https://docs.vulkan.org/spec/latest/chapters/initialization.html#VUID-vkDestroyInstance-instance-00629)
+Objects: 2
+    [0] VkInstance 0x2ad1a76ac30
+    [1] VkSurfaceKHR 0x5a000000005a
+
+[LUA IO] Teardown Complete. Safe Exit.
+[LUA-OS-THREAD] VM Destroyed.
+[C-CORE] Clean Exit.
