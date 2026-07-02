@@ -85,12 +85,12 @@ local order = {
 --     "c/vx_glfw_multiplexer.h",
 --     "c/vx_vulkan_core.h",
 --     "c/vx_vulkan_render.h",
-    -- "c/vx_net.c",
+--     "c/vx_net.c",
 --     "c/vx_global_state.c",
 --     "c/vx_glfw_multiplexer.c",
 --     "c/vx_vulkan_core.c",
 --     "c/vx_vulkan_render.c",
---    "c/main.c",
+     "c/main.c",
 
     -- 2. GLSL SHADERS & SSOT
     -- "glsl/shared.glsl",
@@ -137,12 +137,12 @@ local order = {
 --    "lua/vulkan_core.lua",       -- Needs registry_vk, vulkan_headers, engine_api
 
 --    -- 6. LUA LEVEL 3 (Orchestration - Depends on Level 2)
-    "lua/sequence.lua",          -- Needs memory, swapchain, descriptors, etc.
+--    "lua/sequence.lua",          -- Needs memory, swapchain, descriptors, etc.
 --    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
 
 --    -- 7. ENTRY POINTS (Masters)
 --    "build.lua",
-    "main.lua",
+--    "main.lua",
 }
 
 for _, src in ipairs(order) do local f = io.open(src, "r") if f then

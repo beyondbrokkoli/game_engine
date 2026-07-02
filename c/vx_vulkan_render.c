@@ -391,25 +391,18 @@ static THREAD_FUNC render_thread_loop(void* arg) {
         for (int wid = 0; wid < MAX_WINDOWS; wid++) {
             int cmd = atomic_load_explicit(&g_engine.mailbox.tenants[wid].glfw_cmd, memory_order_acquire);
 
-            // --- NEW: Granular Teardown & Detachment ---
             if (cmd == CMD_KILL_WINDOW) {
                 RenderThreadInit* wsi = &g_window_wsi[wid];
-                if (wsi->device && wsi->vkWaitForFences) {
-                    PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)wsi->vkWaitForFences;
 
-                    // 1. Wait for all in-flight render frames to complete (Granular)
-                    for (uint32_t f = 0; f < wsi->max_frames_in_flight; f++) {
-                        if (wsi->in_flight[f]) {
-                            pfnWait(wsi->device, 1, &wsi->in_flight[f], VK_TRUE, 2000000000);
-                        }
-                    }
-                    // 2. Wait for the transfer fence to ensure transfer thread is detached
-                    if (g_transfer_fences[wid]) {
-                        pfnWait(wsi->device, 1, &g_transfer_fences[wid], VK_TRUE, 2000000000);
-                    }
+                // 1. Immediately mark the tenant as dead so the execution loop below ignores it
+                S(g_wsi_state[wid], 0);
+
+                // 2. The Parachute: Hardware flush instead of granular WSI demons
+                if (wsi->device) {
+                    vkDeviceWaitIdle(wsi->device);
                 }
 
-                // 3. Signal Lua that C-Core is fully detached and GPU is idle
+                // 3. Signal Lua and the Main Thread that detachment is absolute
                 S(g_engine.mailbox.tenants[wid].teardown_complete, 1);
 
                 // 4. Clear the command so we don't process it again
@@ -497,18 +490,27 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             PFN_vkAcquireNextImageKHR pfnAcquire =
                 (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
             uint32_t img_idx;
-            VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain,
-                5000000, win_wsi->image_available[current_frame],
-                VK_NULL_HANDLE, &img_idx);
+            VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain, 5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
 
             if (res == VK_TIMEOUT || res == VK_NOT_READY) {
                 goto frame_done;
             }
-            if (res == VK_ERROR_OUT_OF_DATE_KHR) {
-                S(g_engine.mailbox.tenants[wid].window_resized, 1);
+
+            // --- NEW: Handle both Resize AND Surface Lost ---
+            if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_ERROR_SURFACE_LOST_KHR) {
+                if (res == VK_ERROR_OUT_OF_DATE_KHR) {
+                    // Window was resized, trigger a WSI rebuild
+                    S(g_engine.mailbox.tenants[wid].window_resized, 1);
+                } else {
+                    // VK_ERROR_SURFACE_LOST_KHR: Window is actively being destroyed!
+                    // Mark this tenant's WSI as dead so the multiplexer stops trying to render to it.
+                    S(g_wsi_state[wid], 0);
+                    printf("[C-WARN] Tenant %d: Surface lost during acquire. Idling slot.\n", wid);
+                }
                 SLEEP_MS(10);
                 goto frame_done;
             }
+
 
             PFN_vkResetFences pfnReset =
                 (PFN_vkResetFences)win_wsi->vkResetFences;
