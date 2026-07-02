@@ -241,13 +241,6 @@ EXPORT int vx_input_spacebar(int win_id) {
     return L(g_engine.mailbox.tenants[win_id].key_space);
 }
 
-/* Add the implementation */
-EXPORT int vx_sys_close_requested(int win_id) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    // Reads the flag and immediately resets it to 0
-    return E_A(g_engine.mailbox.tenants[win_id].close_requested, 0);
-}
-
 EXPORT int vx_sys_get_resize_state(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return atomic_load_explicit(

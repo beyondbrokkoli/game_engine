@@ -38,9 +38,6 @@ local TenantRegistry = require("tenant_registry")
 local graphics_mod = require("graphics_pipeline")
 local manifest = require("pipeline_manifest")
 
-local renderer_mod = require("renderer")
-local swapchain_mod = require("swapchain")
-
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
     if jit.os == "Windows" then ffi.C.Sleep(ms) else ffi.C.usleep(ms * 1000) end
@@ -321,57 +318,6 @@ local function main()
             EngineAPI.shutdown()
         end
 
-        -- [NEW] OS Window Close Intercept & Dynamic Teardown
-        for win_id, tenant in pairs(TenantRegistry.active) do
-            if WindowAPI.close_requested(win_id) then
-                if win_id == 0 then
-                    -- The Master Tenant (0) dictates the engine lifecycle.
-                    print("[LUA IO] Primary Window 'X' clicked. Initiating Global Shutdown.")
-                    EngineAPI.shutdown()
-                else
-                    -- Cleanly burn down JUST this sub-tenant in real-time
-                    print(string.format("[TEARDOWN] OS 'X' clicked. Purging Sub-Tenant %d...", win_id))
-
-                    -- 1. Surgical Teardown: Wait ONLY for this specific tenant's GPU work to finish
-                    for i = 0, tenant.sc.imageCount - 1 do
-                        if tenant.sync.inFlight[i] ~= nil then
-                            -- Construct a 1-element C-array to satisfy the const VkFence* pFences signature
-                            local fence_ptr = ffi.new("VkFence[1]", tenant.sync.inFlight[i])
-
-                            -- Pass the array pointer, and use 1 for VK_TRUE
-                            vk_rt.vk.vkWaitForFences(vk_rt.device, 1, fence_ptr, 1, 2000000000)
-                        end
-                    end
-
-                    -- 2. Destroy the active pipelines, swapchains, and sync primitives
-                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
-                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
-
-                    -- 3. Explicitly destroy the surface in Lua
-                    local surface_ptr = WindowAPI.get_surface(win_id)
-                    if surface_ptr ~= nil then
-                        local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
-                        vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
-                    end
-
-                    -- 4. Instruct the C-Core to finally execute the native GLFW window destruction
-                    WindowAPI.destroy(win_id)
-
-                    -- 5. Erase from the registry so the render loop stops ticking it
-                    TenantRegistry.active[win_id] = nil
-                end
-            end
-        end
-
-        -- 1. Get the single, authoritative focused window from the OS
-        local active_win_id = ffi.C.vx_input_get_active_window()
-
-        -- Engine Shutdown Hook (Fallback / Hotkey)
-        if active_win_id == 0 and WindowAPI.get_last_key(active_win_id) == cfg_gfx.key.esc then
-            EngineAPI.shutdown()
-        end
-
         -- 2. Clear mouse state for any window that DOES NOT have focus
         for win_id in pairs(TenantRegistry.active) do
             if win_id ~= active_win_id then
@@ -431,6 +377,10 @@ local function main()
                     print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
+
+                    local swapchain_mod = require("swapchain")
+                    local graphics_mod = require("graphics_pipeline")
+                    local renderer_mod = require("renderer")
 
                     graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
                     renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
@@ -519,6 +469,9 @@ local function main()
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
     -- [NEW]: 1. Cleanly burn down every active tenant's resources
+    local graphics_mod = require("graphics_pipeline")
+    local renderer_mod = require("renderer")
+    local swapchain_mod = require("swapchain")
 
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Tenant %d...", win_id))
