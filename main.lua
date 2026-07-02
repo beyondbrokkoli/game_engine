@@ -523,10 +523,12 @@ local function main()
     end
 
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
-    EngineAPI.kill_thread()
+
+    -- 1. HALT THE GPU GLOBALLY
+    -- Wait for all queues and all threads to finish their current workload
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
-    -- [NEW]: 1. Cleanly burn down every active tenant's resources
+    -- 2. BURN DOWN THE VULKAN RESOURCES IN LUA
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
@@ -534,27 +536,20 @@ local function main()
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Tenant %d...", win_id))
 
-        -- Destroy the active pipelines, swapchains, and sync primitives
         graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
         renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
         swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
-        -- [THE FINAL FIX]: Explicitly destroy the surface in Lua
         local surface_ptr = WindowAPI.get_surface(win_id)
         if surface_ptr ~= nil then
             local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
         end
-
-        -- NOW instruct the C-Core to destroy the GLFW OS window
-        WindowAPI.destroy(win_id)
     end
 
-    -- 2. Destroy the Global / Shared Engine State
+    -- Destroy the Global / Shared Engine State
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
-
-    -- [DELETED]: The old global gfx, sc, and sync destroy calls were removed from here!
 
     memory.DestroyBuffer("MASTER_GPU_BLOCK", vk_rt)
     memory.DestroyBuffer("MASTER_INDEX_BLOCK", vk_rt)
@@ -564,8 +559,14 @@ local function main()
     net.Shutdown()
     memory.DestroyTransferSubsystem(vk_rt)
 
-    -- 3. Shut down the core Vulkan Instance and Device
     require("vulkan_core").Destroy(vk_rt, cfg_gfx.cfg)
+
+    -- 3. FINALLY, KILL THE C-CORE
+    -- The GPU is idle and Vulkan is destroyed. It is now safe for the C-Core
+    -- to destroy the GLFW windows, command pools, and terminate its threads.
+    EngineAPI.kill_thread()
+    EngineAPI.mark_finished()
+
     print("[LUA IO] Teardown Complete. Safe Exit.")
 end
 
