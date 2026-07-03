@@ -401,6 +401,14 @@ static THREAD_FUNC render_thread_loop(void* arg) {
                 RenderThreadInit* wsi = &g_window_wsi[w];
                 if (wsi->device) {
                     vkDeviceWaitIdle(wsi->device);
+
+                    // --- INJECT THIS: Purge Latent References ---
+                    if (g_render_cmd_pools[w]) {
+                        vkResetCommandPool(wsi->device, g_render_cmd_pools[w], 0);
+                    }
+                    if (g_transfer_cmd_pools[w]) {
+                        vkResetCommandPool(wsi->device, g_transfer_cmd_pools[w], 0);
+                    }
                 }
                 S(g_wsi_state[w], 0);
                 atomic_store_explicit(
