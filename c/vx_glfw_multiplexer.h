@@ -32,7 +32,6 @@ EXPORT uint32_t   vx_input_wasd(int win_id);
 EXPORT float      vx_input_mouse_dx(int win_id);
 EXPORT float      vx_input_mouse_dy(int win_id);
 EXPORT int        vx_input_spacebar(int win_id);
-EXPORT int        vx_sys_close_requested(int win_id); /* Add this back */
 EXPORT int        vx_sys_get_resize_state(int win_id);
 
 /* ── Window System Helpers (EXPORT for Lua FFI) ─────────────────── */

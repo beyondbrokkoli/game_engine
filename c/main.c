@@ -127,35 +127,39 @@ int main(int argc, char** argv) {
                     }
                 }
 
-            // REPLACE the CMD_KILL_WINDOW block inside the main loop with this:
+            /* ── KILL ───────────────────────────────────────────── */
             } else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-                // 1. Prevent new render packets from being acquired for this tenant
+
                 S(g_wsi_state[id], 0);
 
-                // 2. Wait for the Render Thread to finish GPU synchronization and signal detachment
-                int timeout = 4000; // 4 second safety timeout
-                while (L(g_engine.mailbox.tenants[id].teardown_complete) == 0) {
+                int timeout = 2000;
+                while (L(g_render_busy[id])) {
                     SLEEP_MS(1);
                     timeout--;
                     if (timeout <= 0) {
-                        printf("[C-FATAL] Render thread failed to signal teardown_complete "
-                               "for Tenant %d. Force overriding.\n", id);
+                        printf("[C-FATAL] Render thread failed to release "
+                               "busy flag for Tenant %d. "
+                               "Force overriding.\n", id);
                         break;
                     }
                 }
 
-                // 3. Now it is 100% safe to destroy Vulkan objects and the OS window
                 if (g_window_wsi[id].device) {
+                    vkDeviceWaitIdle(g_window_wsi[id].device);
+
                     if (g_render_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device, g_render_cmd_pools[id], NULL);
+                        vkDestroyCommandPool(g_window_wsi[id].device,
+                            g_render_cmd_pools[id], NULL);
                         g_render_cmd_pools[id] = VK_NULL_HANDLE;
                     }
                     if (g_transfer_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device, g_transfer_cmd_pools[id], NULL);
+                        vkDestroyCommandPool(g_window_wsi[id].device,
+                            g_transfer_cmd_pools[id], NULL);
                         g_transfer_cmd_pools[id] = VK_NULL_HANDLE;
                     }
                     if (g_transfer_fences[id]) {
-                        vkDestroyFence(g_window_wsi[id].device, g_transfer_fences[id], NULL);
+                        vkDestroyFence(g_window_wsi[id].device,
+                            g_transfer_fences[id], NULL);
                         g_transfer_fences[id] = VK_NULL_HANDLE;
                     }
                 }
@@ -164,19 +168,14 @@ int main(int argc, char** argv) {
                 windows[id] = NULL;
                 S(g_engine.mailbox.tenants[id].vk_surface, NULL);
 
-                // 4. Reset the signal for future tenant allocations
-                S(g_engine.mailbox.tenants[id].teardown_complete, 0);
-
                 printf("[C-CORE] Tenant %d Window & Explicit Allocations "
                        "Destroyed Safely.\n", id);
             }
 
             /* ── Close-request intercept (all tenants) ──────────── */
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
-                // Signal Lua that this tenant wants to die
-                S(g_engine.mailbox.tenants[id].close_requested, 1);
-
-                // Veto the OS close request. Lua and the Multiplexer will tear it down natively later.
+                S(g_engine.mailbox.tenants[id].last_key_pressed,
+                  GLFW_KEY_ESCAPE);
                 glfwSetWindowShouldClose(windows[id], GLFW_FALSE);
             }
         }

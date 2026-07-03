@@ -38,9 +38,6 @@ local TenantRegistry = require("tenant_registry")
 local graphics_mod = require("graphics_pipeline")
 local manifest = require("pipeline_manifest")
 
-local renderer_mod = require("renderer")
-local swapchain_mod = require("swapchain")
-
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
     if jit.os == "Windows" then ffi.C.Sleep(ms) else ffi.C.usleep(ms * 1000) end
@@ -359,27 +356,9 @@ local function main()
 
         for win_id, tenant in pairs(TenantRegistry.active) do
 
-            if WindowAPI.close_requested(win_id) then
-                local active_count = 0
-                for _ in pairs(TenantRegistry.active) do
-                    active_count = active_count + 1
-                end
-
-                if active_count <= 1 then
-                    print("[LUA IO] Last active window closed. Initiating Global Shutdown.")
-                    EngineAPI.shutdown()
-                else
-                    print(string.format("[TEARDOWN] Tenant %d close requested. Delegating to Registry...", win_id))
-                    TenantRegistry.teardown_tenant(win_id, vk_rt)
-                    goto continue_tenant
-                end
-            end
-
-            -- STANDARD TENANT ORCHESTRATION (Resizes, Inputs, Rendering)
             if WindowAPI.is_key_down(win_id, cfg_gfx.key.f5) then
                 ffi.C.vx_sys_dump_ring_state(win_id)
             end
-
             if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
                 WindowAPI.trigger_wsi_rebuild(win_id)
                 tenant.suspended = true
@@ -486,12 +465,10 @@ local function main()
     end
 
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
-
-    -- 1. HALT THE GPU GLOBALLY
-    -- Wait for all queues and all threads to finish their current workload
+    EngineAPI.kill_thread()
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
-    -- 2. BURN DOWN THE VULKAN RESOURCES IN LUA
+    -- [NEW]: 1. Cleanly burn down every active tenant's resources
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
@@ -499,20 +476,27 @@ local function main()
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Tenant %d...", win_id))
 
+        -- Destroy the active pipelines, swapchains, and sync primitives
         graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
         renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
         swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
+        -- [THE FINAL FIX]: Explicitly destroy the surface in Lua
         local surface_ptr = WindowAPI.get_surface(win_id)
         if surface_ptr ~= nil then
             local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
         end
+
+        -- NOW instruct the C-Core to destroy the GLFW OS window
+        WindowAPI.destroy(win_id)
     end
 
-    -- Destroy the Global / Shared Engine State
+    -- 2. Destroy the Global / Shared Engine State
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
+
+    -- [DELETED]: The old global gfx, sc, and sync destroy calls were removed from here!
 
     memory.DestroyBuffer("MASTER_GPU_BLOCK", vk_rt)
     memory.DestroyBuffer("MASTER_INDEX_BLOCK", vk_rt)
@@ -522,14 +506,8 @@ local function main()
     net.Shutdown()
     memory.DestroyTransferSubsystem(vk_rt)
 
+    -- 3. Shut down the core Vulkan Instance and Device
     require("vulkan_core").Destroy(vk_rt, cfg_gfx.cfg)
-
-    -- 3. FINALLY, KILL THE C-CORE
-    -- The GPU is idle and Vulkan is destroyed. It is now safe for the C-Core
-    -- to destroy the GLFW windows, command pools, and terminate its threads.
-    EngineAPI.kill_thread()
-    EngineAPI.mark_finished()
-
     print("[LUA IO] Teardown Complete. Safe Exit.")
 end
 

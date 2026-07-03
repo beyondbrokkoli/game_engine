@@ -87,49 +87,4 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     return tenant
 end
 
-function TenantRegistry.teardown_tenant(win_id, vk_rt)
-    local tenant = TenantRegistry.active[win_id]
-    if not tenant then
-        print(string.format("[UI ERROR] Tenant %d does not exist.", win_id))
-        return
-    end
-
-    print(string.format("[UI TEARDOWN] Initiating Phase 1 for Tenant %d...", win_id))
-
-    -- CACHE THE SURFACE: We must grab this before C-Core nullifies it!
-    local surface_ptr = WindowAPI.get_surface(win_id)
-    local vk_surface = nil
-    if surface_ptr ~= ffi.NULL then
-        vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
-    end
-
-    -- Phase 1: Signal C-Core to drop the OS window and pools
-    WindowAPI.destroy(win_id)
-
-    -- Phase 2: Poll until C-Core confirms detachment
-    while WindowAPI.get_surface(win_id) ~= ffi.NULL do
-        ffi.C.Sleep(1)
-    end
-
-    print(string.format("[UI TEARDOWN] C-Core detached. Initiating Phase 3 for Tenant %d...", win_id))
-
-    -- Phase 3: Safe to destroy Lua-owned Vulkan objects
-    local graphics_mod = require("graphics_pipeline")
-    local renderer_mod = require("renderer")
-    local swapchain_mod = require("swapchain")
-
-    if tenant.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx) end
-    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
-
-    -- Destroy the surface using our cached handle
-    if vk_surface then
-        vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
-    end
-
-    -- Purge from registry
-    TenantRegistry.active[win_id] = nil
-    print(string.format("[UI TEARDOWN] Tenant %d completely purged.", win_id))
-end
-
 return TenantRegistry
