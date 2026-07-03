@@ -100,7 +100,7 @@ local order = {
 
 --    -- 3. LUA LEAVES (Level 0: Zero Internal Dependencies)
 --    "lua/config_engine.lua",
-    "lua/config_gfx.lua",
+--    "lua/config_gfx.lua",
 --    "lua/config_net.lua",
 --    "lua/config_sim.lua",
 --    "lua/core_abi.lua",
@@ -108,7 +108,7 @@ local order = {
 --    "lua/engine_api.lua",
 --    "lua/fixed_math.lua",
 --    "lua/network.lua",
-    "lua/pipeline_manifest.lua",
+--    "lua/pipeline_manifest.lua",
 --    "lua/vmath.lua",
 --    "lua/vulkan_headers.lua",
 --    "lua/window_api.lua",
@@ -121,9 +121,9 @@ local order = {
 --    "lua/json_util.lua",       -- Needs dkjson
 --    "lua/net_pump.lua",        -- Needs network
 --    "lua/raycast.lua",         -- Needs vmath, fixed_math, config_sim
-    "lua/registry_vk.lua",     -- Needs vulkan_headers
+--    "lua/registry_vk.lua",     -- Needs vulkan_headers
 --    "lua/render_queue.lua",    -- Needs pipeline_manifest, fixed_math, engine_api, config_gfx
-    "lua/structs.lua",         -- Needs config_net
+--    "lua/structs.lua",         -- Needs config_net
 
 --    -- 5. LUA LEVEL 2 (Depends on Level 1)
 --    "lua/compute_pipeline.lua",  -- Needs registry_vk
@@ -132,17 +132,17 @@ local order = {
 --    "lua/memory.lua",            -- Needs registry_vk
 --    "lua/net_utils.lua",         -- Needs json_util, config_net, network
 --    "lua/registry_export.lua",   -- Needs structs, config_gfx, config_sim, config_net
-    "lua/renderer.lua",          -- Needs registry_vk, pipeline_manifest
-    "lua/swapchain.lua",         -- Needs registry_vk
+--    "lua/renderer.lua",          -- Needs registry_vk, pipeline_manifest
+--    "lua/swapchain.lua",         -- Needs registry_vk
 --    "lua/vulkan_core.lua",       -- Needs registry_vk, vulkan_headers, engine_api
 
 --    -- 6. LUA LEVEL 3 (Orchestration - Depends on Level 2)
-    "lua/sequence.lua",          -- Needs memory, swapchain, descriptors, etc.
-    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
+--    "lua/sequence.lua",          -- Needs memory, swapchain, descriptors, etc.
+--    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
 
 --    -- 7. ENTRY POINTS (Masters)
 --    "build.lua",
---    "main.lua",
+    "main.lua",
 }
 
 

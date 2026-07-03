@@ -310,12 +310,25 @@ local function main()
             end
         end
 
-        -- 1. Get the single, authoritative focused window from the OS
-        local active_win_id = ffi.C.vx_input_get_active_window()
+        local active_win_id = ffi.C.vx_input_get_active_window();
 
-        -- Engine Shutdown Hook
-        if active_win_id >= 0 and WindowAPI.get_last_key(active_win_id) == cfg_gfx.key.esc then
-            EngineAPI.shutdown()
+        -- Check ALL tenants for a close request ('X' button or ESC)
+        for w_id, tnt in pairs(TenantRegistry.active) do
+            if WindowAPI.get_last_key(w_id) == cfg_gfx.key.esc then
+                if w_id == 0 then
+                    print("[LUA CO] Master Window closed. Commencing global shutdown...")
+                    EngineAPI.shutdown()
+                else
+                    if not tnt.kill_state then
+                        print(string.format("[LUA CO] Intercepted close request for Tenant %d. Initiating Teardown...", w_id))
+                        tnt.suspended = true
+                        tnt.kill_state = 1
+                        tnt.kill_wait = 0
+                        -- Phase 1: Force Render Thread to idle GPU and abandon tenant
+                        WindowAPI.trigger_wsi_rebuild(w_id)
+                    end
+                end
+            end
         end
 
         -- 2. Clear mouse state for any window that DOES NOT have focus
@@ -355,14 +368,53 @@ local function main()
         total_time = total_time + frame_time
 
         for win_id, tenant in pairs(TenantRegistry.active) do
-
             if WindowAPI.is_key_down(win_id, cfg_gfx.key.f5) then
-                ffi.C.vx_sys_dump_ring_state(win_id)
+                ffi.C.vx_sys_dump_ring_state(win_id);
             end
-            if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
-                WindowAPI.trigger_wsi_rebuild(win_id)
-                tenant.suspended = true
+
+            -- [PHASE-GATE DYNAMIC TEARDOWN]
+            if tenant.kill_state == 1 then
+                tenant.kill_wait = tenant.kill_wait + 1
+                if tenant.kill_wait > 3 then
+                    -- Frame N+3: Render Thread has definitely idled the GPU and detached.
+                    print(string.format("[LUA CO] Tenant %d: Detached. Destroying Vulkan objects...", win_id))
+                    local swapchain_mod = require("swapchain")
+                    local graphics_mod = require("graphics_pipeline")
+                    local renderer_mod = require("renderer")
+
+                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
+                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
+                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+
+                    local surface_ptr = WindowAPI.get_surface(win_id)
+                    if surface_ptr ~= nil then
+                        local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
+                        vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+                    end
+
+                    -- Phase 2: Issue CMD_KILL_WINDOW to Main Thread
+                    ffi.C.vx_sys_set_cmd(win_id, cfg_gfx.sys.kill, 0, 0)
+
+                    tenant.kill_state = 2
+                    tenant.kill_wait = 0
+                end
                 goto continue_tenant
+
+            elseif tenant.kill_state == 2 then
+                tenant.kill_wait = tenant.kill_wait + 1
+                if tenant.kill_wait > 3 then
+                    -- Frame N+6: Main Thread has definitely destroyed the GLFW Window.
+                    print(string.format("[LUA CO] Tenant %d: OS Window destroyed. Slot freed.", win_id))
+                    TenantRegistry.active[win_id] = nil
+                end
+                goto continue_tenant
+            end
+
+            -- [EXISTING RESIZE LOGIC]
+            if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
+                WindowAPI.trigger_wsi_rebuild(win_id);
+                tenant.suspended = true;
+                goto continue_tenant;
             end
 
             if tenant.suspended then
