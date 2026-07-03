@@ -63,113 +63,52 @@ int main(int argc, char** argv) {
 
             /* ── BOOT ───────────────────────────────────────────── */
             if (cmd == CMD_BOOT_WINDOW && windows[id] == NULL) {
-
-                for (int i = 0; i < MAX_WINDOWS; i++) {
-                    if (L(g_wsi_state[i]) == 1) {
-                        S(g_wsi_state[i], 0);
-                        while (L(g_render_busy[i])) { SLEEP_MS(1); }
-                    }
-                }
-
+                // NO GLOBAL FREEZE. We just create the window.
                 int w = L_R(g_engine.mailbox.tenants[id].glfw_arg_w);
                 int h = L_R(g_engine.mailbox.tenants[id].glfw_arg_h);
 
                 glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-                glfwWindowHint(GLFW_RESIZABLE,  GLFW_TRUE);
-
-                windows[id] = glfwCreateWindow(
-                    w, h, "Weaver Engine Editor", NULL, NULL);
-
-                glfwSetWindowUserPointer(windows[id],
-                                         (void*)(intptr_t)id);
-                glfwSetWindowSizeLimits(windows[id],
-                    640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
+                glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+                windows[id] = glfwCreateWindow(w, h, "Weaver Engine Editor", NULL, NULL);
+                glfwSetWindowUserPointer(windows[id], (void*)(intptr_t)id);
+                glfwSetWindowSizeLimits(windows[id], 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
                 glfwShowWindow(windows[id]);
-
                 glfwSetWindowAttrib(windows[id], GLFW_FLOATING, GLFW_TRUE);
                 glfwFocusWindow(windows[id]);
                 glfwSetWindowAttrib(windows[id], GLFW_FLOATING, GLFW_FALSE);
-
-                glfwSetFramebufferSizeCallback(windows[id],
-                    glfw_framebuffer_size_callback);
-                glfwSetKeyCallback(windows[id],
-                    glfw_key_callback);
-                glfwSetCursorPosCallback(windows[id],
-                    glfw_cursor_callback);
-                glfwSetMouseButtonCallback(windows[id],
-                    glfw_mouse_button_callback);
+                glfwSetFramebufferSizeCallback(windows[id], glfw_framebuffer_size_callback);
+                glfwSetKeyCallback(windows[id], glfw_key_callback);
+                glfwSetCursorPosCallback(windows[id], glfw_cursor_callback);
+                glfwSetMouseButtonCallback(windows[id], glfw_mouse_button_callback);
 
                 int fb_w, fb_h;
                 glfwGetFramebufferSize(windows[id], &fb_w, &fb_h);
                 S(g_engine.mailbox.tenants[id].win_w, fb_w);
                 S(g_engine.mailbox.tenants[id].win_h, fb_h);
 
-                void* instance =
-                    L(g_engine.mailbox.tenants[id].vk_instance);
+                void* instance = L(g_engine.mailbox.tenants[id].vk_instance);
                 if (instance != NULL) {
                     VkSurfaceKHR surface;
-                    if (glfwCreateWindowSurface(
-                            (VkInstance)instance, windows[id],
-                            NULL, &surface) == VK_SUCCESS) {
-                        S(g_engine.mailbox.tenants[id].vk_surface,
-                          (void*)surface);
-                        printf("[C-CORE] Tenant %d: Window & Surface "
-                               "Created safely!\n", id);
-                    }
-                } else {
-                    printf("[C-ERROR] Tenant %d missing Vulkan instance! "
-                           "Window surface creation aborted.\n", id);
-                }
-
-                for (int i = 0; i < MAX_WINDOWS; i++) {
-                    if (windows[i] != NULL && i != id) {
-                        S(g_wsi_state[i], 1);
+                    if (glfwCreateWindowSurface((VkInstance)instance, windows[id], NULL, &surface) == VK_SUCCESS) {
+                        S(g_engine.mailbox.tenants[id].vk_surface, (void*)surface);
+                        printf("[C-CORE] Tenant %d: Mid-loop Window & Surface Created!\n", id);
                     }
                 }
-
-            /* ── KILL ───────────────────────────────────────────── */
-            } else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-
-                S(g_wsi_state[id], 0);
-
-                int timeout = 2000;
-                while (L(g_render_busy[id])) {
-                    SLEEP_MS(1);
-                    timeout--;
-                    if (timeout <= 0) {
-                        printf("[C-FATAL] Render thread failed to release "
-                               "busy flag for Tenant %d. "
-                               "Force overriding.\n", id);
-                        break;
-                    }
-                }
-
-                if (g_window_wsi[id].device) {
-                    vkDeviceWaitIdle(g_window_wsi[id].device);
-
-                    if (g_render_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device,
-                            g_render_cmd_pools[id], NULL);
-                        g_render_cmd_pools[id] = VK_NULL_HANDLE;
-                    }
-                    if (g_transfer_cmd_pools[id]) {
-                        vkDestroyCommandPool(g_window_wsi[id].device,
-                            g_transfer_cmd_pools[id], NULL);
-                        g_transfer_cmd_pools[id] = VK_NULL_HANDLE;
-                    }
-                    if (g_transfer_fences[id]) {
-                        vkDestroyFence(g_window_wsi[id].device,
-                            g_transfer_fences[id], NULL);
-                        g_transfer_fences[id] = VK_NULL_HANDLE;
-                    }
-                }
+                // ACK to Lua that the OS window is ready
+                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+            }
+            else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
+                // NO BLOCKING. The Render Thread has already abandoned this tenant
+                // because Lua sent CMD_REBUILD_WSI first.
+                // Lua has already destroyed the Vulkan objects via FFI at this point.
 
                 glfwDestroyWindow(windows[id]);
                 windows[id] = NULL;
                 S(g_engine.mailbox.tenants[id].vk_surface, NULL);
 
-                printf("[C-CORE] Tenant %d Window & Explicit Allocations "
-                       "Destroyed Safely.\n", id);
+                // ACK to Lua that the OS window is gone
+                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+                printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
             }
 
             /* ── Close-request intercept (all tenants) ──────────── */
