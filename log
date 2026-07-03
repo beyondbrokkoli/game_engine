@@ -1,1 +1,6 @@
-MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0xb300000000b3 that is currently in use by VkCommandBuffer 0x280d93aa768.
+SEVERITY: 4096
+MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x8f000000008f that is currently in use by VkCommandBuffer 0x25ef9515c98.
+The Vulkan spec states: All submitted commands that refer to pipeline must have completed execution
+
+MESSAGE: vkDestroyImage(): can't be called on VkImage 0x890000000089 that is currently in use by VkCommandBuffer 0x25ef9515c98.
+The Vulkan spec states: All submitted commands that refer to image, either directly or via a VkImageView, must have completed execution 
