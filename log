@@ -1,6 +1,11 @@
-SEVERITY: 4096
-MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x8f000000008f that is currently in use by VkCommandBuffer 0x25ef9515c98.
-The Vulkan spec states: All submitted commands that refer to pipeline must have completed execution
+[LUA CO] Tenant 2: Detached. Destroying Vulkan objects...
+[TEARDOWN] Destroying Graphics Pipelines, Depth Buffer & ID Buffer...
+MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x13d000000013d that is currently in use by VkCommandBuffer 0x1e1df7a6668.
+MESSAGE: vkDestroyPipeline(): can't be called on VkPipeline 0x13e000000013e that is currently in use by VkCommandBuffer 0x1e1df7a6668.
+MESSAGE: vkDestroyImage(): can't be called on VkImage 0x1380000000138 that is currently in use by VkCommandBuffer 0x1e1df7a6668.
+[TEARDOWN] Dismantling Renderer Sync Objects...
+MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x1420000000142 that is currently in use by VkQueue 0x1e1d2e43758.
+MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x1430000000143 that is currently in use by VkQueue 0x1e1d2e43758.
+MESSAGE: vkDestroyFence(): can't be called on VkFence 0x1440000000144 that is currently in use by VkQueue 0x1e1d2e43758.
+MESSAGE: vkDestroySemaphore(): can't be called on VkSemaphore 0x1460000000146 that is currently in use by VkQueue 0x1e1d2e43758.
 
-MESSAGE: vkDestroyImage(): can't be called on VkImage 0x890000000089 that is currently in use by VkCommandBuffer 0x25ef9515c98.
-The Vulkan spec states: All submitted commands that refer to image, either directly or via a VkImageView, must have completed execution 
