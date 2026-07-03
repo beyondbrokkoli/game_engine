@@ -315,18 +315,13 @@ local function main()
         -- Check ALL tenants for a close request ('X' button or ESC)
         for w_id, tnt in pairs(TenantRegistry.active) do
             if WindowAPI.get_last_key(w_id) == cfg_gfx.key.esc then
-                if w_id == 0 then
-                    print("[LUA CO] Master Window closed. Commencing global shutdown...")
-                    EngineAPI.shutdown()
-                else
-                    if not tnt.kill_state then
-                        print(string.format("[LUA CO] Intercepted close request for Tenant %d. Initiating Teardown...", w_id))
-                        tnt.suspended = true
-                        tnt.kill_state = 1
-                        tnt.kill_wait = 0
-                        -- Phase 1: Force Render Thread to idle GPU and abandon tenant
-                        WindowAPI.trigger_wsi_rebuild(w_id)
-                    end
+                if not tnt.kill_state then
+                    print(string.format("[LUA CO] Intercepted close request for Tenant %d. Initiating Teardown...", w_id))
+                    tnt.suspended = true
+                    tnt.kill_state = 1
+                    tnt.kill_wait = 0
+                    -- Phase 1: Force Render Thread to idle GPU and abandon tenant
+                    WindowAPI.trigger_wsi_rebuild(w_id)
                 end
             end
         end
@@ -375,8 +370,8 @@ local function main()
             -- [PHASE-GATE DYNAMIC TEARDOWN]
             if tenant.kill_state == 1 then
                 tenant.kill_wait = tenant.kill_wait + 1
-                if tenant.kill_wait > 3 then
-                    -- Frame N+3: Render Thread has definitely idled the GPU and detached.
+                -- Increased safety margin to 45 frames (~0.75s) to guarantee C-Core Idle
+                if tenant.kill_wait > 45 then
                     print(string.format("[LUA CO] Tenant %d: Detached. Destroying Vulkan objects...", win_id))
                     local swapchain_mod = require("swapchain")
                     local graphics_mod = require("graphics_pipeline")
@@ -402,10 +397,18 @@ local function main()
 
             elseif tenant.kill_state == 2 then
                 tenant.kill_wait = tenant.kill_wait + 1
-                if tenant.kill_wait > 3 then
-                    -- Frame N+6: Main Thread has definitely destroyed the GLFW Window.
+                -- Wait 15 frames for the OS to process glfwDestroyWindow
+                if tenant.kill_wait > 15 then
                     print(string.format("[LUA CO] Tenant %d: OS Window destroyed. Slot freed.", win_id))
                     TenantRegistry.active[win_id] = nil
+
+                    -- [GLOBAL SHUTDOWN CHECK]
+                    local active_count = 0
+                    for _ in pairs(TenantRegistry.active) do active_count = active_count + 1 end
+                    if active_count == 0 then
+                        print("[LUA CO] All tenants dismantled. Commencing global shutdown...")
+                        EngineAPI.shutdown()
+                    end
                 end
                 goto continue_tenant
             end
