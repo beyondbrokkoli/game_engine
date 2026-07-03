@@ -59,10 +59,12 @@ int main(int argc, char** argv) {
 
         /* ── Per-tenant command dispatch ────────────────────────── */
         for (int id = 0; id < MAX_WINDOWS; id++) {
-            int cmd = E_A(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+            // 1. Use atomic_load (L) instead of atomic_exchange (E_A)!
+            // Do not wipe the mailbox. Just peek at it.
+            int cmd = L(g_engine.mailbox.tenants[id].glfw_cmd);
 
-            /* ── BOOT ───────────────────────────────────────────── */
             if (cmd == CMD_BOOT_WINDOW && windows[id] == NULL) {
+                // ... (your existing mid-loop boot code remains here) ...
                 // NO GLOBAL FREEZE. We just create the window.
                 int w = L_R(g_engine.mailbox.tenants[id].glfw_arg_w);
                 int h = L_R(g_engine.mailbox.tenants[id].glfw_arg_h);
@@ -94,21 +96,18 @@ int main(int argc, char** argv) {
                         printf("[C-CORE] Tenant %d: Mid-loop Window & Surface Created!\n", id);
                     }
                 }
-                // ACK to Lua that the OS window is ready
-                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-            }
-            else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-                // NO BLOCKING. The Render Thread has already abandoned this tenant
-                // because Lua sent CMD_REBUILD_WSI first.
-                // Lua has already destroyed the Vulkan objects via FFI at this point.
+                    // 2. Clear the command ONLY after we successfully process it
+                    S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+                }
+                else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
+                    glfwDestroyWindow(windows[id]);
+                    windows[id] = NULL;
+                    S(g_engine.mailbox.tenants[id].vk_surface, NULL);
 
-                glfwDestroyWindow(windows[id]);
-                windows[id] = NULL;
-                S(g_engine.mailbox.tenants[id].vk_surface, NULL);
-
-                // ACK to Lua that the OS window is gone
-                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
+                    // 2. Clear the command ONLY after we successfully process it
+                    S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+                    printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
+                }
             }
 
             /* ── Close-request intercept (all tenants) ──────────── */
