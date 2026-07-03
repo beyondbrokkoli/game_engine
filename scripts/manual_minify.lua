@@ -80,17 +80,17 @@ print("--- AI SNAPSHOT ---")
 
 local order = {
     -- 1. C-CORE & HEADERS (Absolute Foundation)
---     "c/shared_structs.h",
---     "c/vx_global_state.h",
+     "c/shared_structs.h",
+     "c/vx_global_state.h",
 --     "c/vx_vulkan_core.h",
---     "c/vx_vulkan_render.h",
---     "c/vx_glfw_multiplexer.h",
---     "c/vx_global_state.c",
+     "c/vx_vulkan_render.h",
+     "c/vx_glfw_multiplexer.h",
+     "c/vx_global_state.c",
 --     "c/vx_vulkan_core.c",
 --     "c/vx_glfw_multiplexer.c",
---     "c/vx_vulkan_render.c",
+     "c/vx_vulkan_render.c",
 --     "c/vx_net.c",
---     "c/main.c",
+     "c/main.c",
 
     -- 2. GLSL SHADERS & SSOT
     -- "glsl/shared.glsl",
@@ -123,7 +123,7 @@ local order = {
 --    "lua/raycast.lua",         -- Needs vmath, fixed_math, config_sim
 --    "lua/registry_vk.lua",     -- Needs vulkan_headers
 --    "lua/render_queue.lua",    -- Needs pipeline_manifest, fixed_math, engine_api, config_gfx
---    "lua/structs.lua",         -- Needs config_net
+    "lua/structs.lua",         -- Needs config_net
 
 --    -- 5. LUA LEVEL 2 (Depends on Level 1)
 --    "lua/compute_pipeline.lua",  -- Needs registry_vk
@@ -138,7 +138,7 @@ local order = {
 
 --    -- 6. LUA LEVEL 3 (Orchestration - Depends on Level 2)
 --    "lua/sequence.lua",          -- Needs memory, swapchain, descriptors, etc.
---    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
+    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
 
 --    -- 7. ENTRY POINTS (Masters)
 --    "build.lua",

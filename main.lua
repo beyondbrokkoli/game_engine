@@ -520,11 +520,21 @@ local function main()
 
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
 
-    -- 1. WAIT IDLE FIRST. Stop the GPU from processing any more commands.
+    -- 1. THE MASTERSTROKE: Leverage our proven Phase-Gate isolation!
+    -- Send CMD_REBUILD_WSI to all remaining tenants to force the Render Thread
+    -- to idle the GPU, explicitly reset the command pools, and isolate itself.
+    for win_id, tenant in pairs(TenantRegistry.active) do
+        WindowAPI.trigger_wsi_rebuild(win_id)
+    end
+
+    -- 2. Give the async Render Thread a fraction of a second to process the commands.
+    sys_sleep(50)
+
+    -- Ensure the device is absolutely quiet.
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
-    -- 2. Cleanly burn down every active tenant's resources (if any remain)
-    -- Do this BEFORE killing the C-Core threads so the Command Pools stay alive!
+    -- 3. Now the Render Thread has cleanly abandoned the tenants and reset the pools.
+    -- We can safely destroy the Vulkan objects in Lua without Validation Layer panic!
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
@@ -532,23 +542,24 @@ local function main()
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Remaining Tenant %d...", win_id))
 
-        -- Destroy the active pipelines, swapchains, and sync primitives
         graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
         renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
         swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
 
-        -- Explicitly destroy the surface in Lua
         local surface_ptr = WindowAPI.get_surface(win_id)
         if surface_ptr ~= nil then
             local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
         end
 
-        -- Instruct the C-Core to destroy the GLFW OS window
         WindowAPI.destroy(win_id)
     end
 
-    -- 3. Destroy the Global / Shared Engine State
+    -- 4. NOW kill the C-Core threads. Since the pools were already cleanly reset,
+    -- destroying them natively here will be completely silent.
+    EngineAPI.kill_thread()
+
+    -- 5. Destroy the Global / Shared Engine State
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
 
@@ -557,13 +568,10 @@ local function main()
     memory.DestroyBuffer("PALETTE_STAGING", vk_rt)
     memory.DestroyBuffer("PALETTE_HAVEN", vk_rt)
 
-    -- 4. NOW kill the C-Core threads and destroy the Command Pools natively
-    EngineAPI.kill_thread()
-
     net.Shutdown()
     memory.DestroyTransferSubsystem(vk_rt)
 
-    -- 5. Shut down the core Vulkan Instance and Device
+    -- 6. Shut down the core Vulkan Instance and Device
     require("vulkan_core").Destroy(vk_rt, cfg_gfx.cfg)
     print("[LUA IO] Teardown Complete. Safe Exit.")
 end
