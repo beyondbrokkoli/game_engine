@@ -96,18 +96,17 @@ int main(int argc, char** argv) {
                         printf("[C-CORE] Tenant %d: Mid-loop Window & Surface Created!\n", id);
                     }
                 }
-                    // 2. Clear the command ONLY after we successfully process it
-                    S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                }
-                else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-                    glfwDestroyWindow(windows[id]);
-                    windows[id] = NULL;
-                    S(g_engine.mailbox.tenants[id].vk_surface, NULL);
+                // 2. Clear the command ONLY after we successfully process it
+                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+            }
+            else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
+                glfwDestroyWindow(windows[id]);
+                windows[id] = NULL;
+                S(g_engine.mailbox.tenants[id].vk_surface, NULL);
 
-                    // 2. Clear the command ONLY after we successfully process it
-                    S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                    printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
-                }
+                // 2. Clear the command ONLY after we successfully process it
+                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+                printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
             }
 
             /* ── Close-request intercept (all tenants) ──────────── */
