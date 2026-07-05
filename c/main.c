@@ -113,7 +113,11 @@ int main(int argc, char** argv) {
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
                 S(g_engine.mailbox.tenants[id].last_key_pressed,
                   GLFW_KEY_ESCAPE);
-                glfwSetWindowShouldClose(windows[id], GLFW_FALSE);
+
+                // Do NOT reset the close flag here.
+                // Let C persistently spam the ESCAPE signal to the mailbox.
+                // The loop will naturally break when Lua sends CMD_KILL_WINDOW
+                // and sets windows[id] = NULL.
             }
         }
 
