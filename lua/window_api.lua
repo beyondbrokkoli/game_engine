@@ -21,24 +21,19 @@ end
 function WindowAPI.destroy(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 2, 0, 0)
 end
--- Replace WindowAPI.was_resized with:
 function WindowAPI.get_resize_state(win_id)
     return ffi.C.vx_sys_get_resize_state(win_id) == 1
 end
-
--- Add this new helper to trigger Phase 2 rebuild
 function WindowAPI.trigger_wsi_rebuild(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0) -- 3 = CMD_REBUILD_WSI
 end
-
--- [NEW] Omniscience Poll to verify C-Core detachment
 function WindowAPI.is_tenant_idle(win_id)
     return ffi.C.vx_sys_is_tenant_idle(win_id)
 end
-
-local _w_ptr = ffi.new("int[1]")
-local _h_ptr = ffi.new("int[1]")
+-- [FIX APPLIED] Removed root-level _w_ptr and _h_ptr
 function WindowAPI.get_window_size(win_id)
+    local _w_ptr = ffi.new("int[1]")
+    local _h_ptr = ffi.new("int[1]")
     ffi.C.vx_sys_window_size(win_id, _w_ptr, _h_ptr)
     return _w_ptr[0], _h_ptr[0]
 end

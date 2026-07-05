@@ -1,3 +1,4 @@
+-- lua/vmath.lua
 local ffi = require("ffi")
 local math = require("math")
 
@@ -8,66 +9,84 @@ ffi.cdef[[
     typedef struct __attribute__((aligned(16))) { float m[16]; } mat4_t;
 ]]
 
-local temp_f = ffi.new("vec4_t")
-local temp_u = ffi.new("vec4_t")
-local temp_r = ffi.new("vec4_t")
-local temp_mat = ffi.new("mat4_t")
+-- [FIX APPLIED] Removed all root-level temp FFI allocations
 
 function vmath.lookAt(eye_x, eye_y, eye_z, center_x, center_y, center_z, out_mat)
-    temp_f.x = center_x - eye_x
-    temp_f.y = center_y - eye_y
-    temp_f.z = center_z - eye_z
+    -- Use raw local variables instead of FFI structs
+    local fx = center_x - eye_x
+    local fy = center_y - eye_y
+    local fz = center_z - eye_z
 
-    local f_inv = 1.0 / math.sqrt(temp_f.x^2 + temp_f.y^2 + temp_f.z^2)
-    temp_f.x = temp_f.x * f_inv
-    temp_f.y = temp_f.y * f_inv
-    temp_f.z = temp_f.z * f_inv
+    local f_inv = 1.0 / math.sqrt(fx^2 + fy^2 + fz^2)
+    fx = fx * f_inv
+    fy = fy * f_inv
+    fz = fz * f_inv
 
     local up_x = 0.0
     local up_y = 1.0
     local up_z = 0.0
 
-    if math.abs(temp_f.x) < 0.001 and math.abs(temp_f.z) < 0.001 then
-        if temp_f.y > 0 then up_z = -1.0 else up_z = 1.0 end
+    if math.abs(fx) < 0.001 and math.abs(fz) < 0.001 then
+        if fy > 0 then up_z = -1.0 else up_z = 1.0 end
         up_y = 0.0
         up_x = 0.0
     end
 
-    temp_r.x = up_y * temp_f.z - up_z * temp_f.y
-    temp_r.y = up_z * temp_f.x - up_x * temp_f.z
-    temp_r.z = up_x * temp_f.y - up_y * temp_f.x
+    local rx = up_y * fz - up_z * fy
+    local ry = up_z * fx - up_x * fz
+    local rz = up_x * fy - up_y * fx
 
-    local r_inv = 1.0 / math.sqrt(temp_r.x^2 + temp_r.y^2 + temp_r.z^2)
-    temp_r.x = temp_r.x * r_inv
-    temp_r.y = temp_r.y * r_inv
-    temp_r.z = temp_r.z * r_inv
+    local r_inv = 1.0 / math.sqrt(rx^2 + ry^2 + rz^2)
+    rx = rx * r_inv
+    ry = ry * r_inv
+    rz = rz * r_inv
 
-    temp_u.x = temp_f.y * temp_r.z - temp_f.z * temp_r.y
-    temp_u.y = temp_f.z * temp_r.x - temp_f.x * temp_r.z
-    temp_u.z = temp_f.x * temp_r.y - temp_f.y * temp_r.x
+    local ux = fy * rz - fz * ry
+    local uy = fz * rx - fx * rz
+    local uz = fx * ry - fy * rx
 
-    out_mat.m[0] = temp_r.x;  out_mat.m[1] = temp_u.x;  out_mat.m[2] = -temp_f.x;  out_mat.m[3] = 0.0;
-    out_mat.m[4] = temp_r.y;  out_mat.m[5] = temp_u.y;  out_mat.m[6] = -temp_f.y;  out_mat.m[7] = 0.0;
-    out_mat.m[8] = temp_r.z;  out_mat.m[9] = temp_u.z;  out_mat.m[10] = -temp_f.z; out_mat.m[11] = 0.0;
+    out_mat.m[0] = rx;  out_mat.m[1] = ux;  out_mat.m[2] = -fx;  out_mat.m[3] = 0.0;
+    out_mat.m[4] = ry;  out_mat.m[5] = uy;  out_mat.m[6] = -fy;  out_mat.m[7] = 0.0;
+    out_mat.m[8] = rz;  out_mat.m[9] = uz;  out_mat.m[10] = -fz; out_mat.m[11] = 0.0;
 
-    out_mat.m[12] = -(temp_r.x*eye_x + temp_r.y*eye_y + temp_r.z*eye_z)
-    out_mat.m[13] = -(temp_u.x*eye_x + temp_u.y*eye_y + temp_u.z*eye_z)
-    out_mat.m[14] = (temp_f.x*eye_x + temp_f.y*eye_y + temp_f.z*eye_z)
+    out_mat.m[12] = -(rx*eye_x + ry*eye_y + rz*eye_z)
+    out_mat.m[13] = -(ux*eye_x + uy*eye_y + uz*eye_z)
+    out_mat.m[14] = (fx*eye_x + fy*eye_y + fz*eye_z)
     out_mat.m[15] = 1.0
 end
 
 function vmath.multiply_mat4(a, b, out_mat)
-    for col = 0, 3 do
-        for row = 0, 3 do
-            temp_mat.m[col*4 + row] = a.m[0*4 + row] * b.m[col*4 + 0] +
-                                      a.m[1*4 + row] * b.m[col*4 + 1] +
-                                      a.m[2*4 + row] * b.m[col*4 + 2] +
-                                      a.m[3*4 + row] * b.m[col*4 + 3]
-        end
-    end
-    for k = 0, 15 do
-        out_mat.m[k] = temp_mat.m[k]
-    end
+    -- Cache values locally to allow 'out_mat' to be the same pointer as 'a' or 'b'
+    -- without causing data corruption mid-calculation.
+    local a00 = a.m[0]; local a10 = a.m[4]; local a20 = a.m[8];  local a30 = a.m[12]
+    local a01 = a.m[1]; local a11 = a.m[5]; local a21 = a.m[9];  local a31 = a.m[13]
+    local a02 = a.m[2]; local a12 = a.m[6]; local a22 = a.m[10]; local a32 = a.m[14]
+    local a03 = a.m[3]; local a13 = a.m[7]; local a23 = a.m[11]; local a33 = a.m[15]
+
+    local b00 = b.m[0]; local b10 = b.m[4]; local b20 = b.m[8];  local b30 = b.m[12]
+    local b01 = b.m[1]; local b11 = b.m[5]; local b21 = b.m[9];  local b31 = b.m[13]
+    local b02 = b.m[2]; local b12 = b.m[6]; local b22 = b.m[10]; local b32 = b.m[14]
+    local b03 = b.m[3]; local b13 = b.m[7]; local b23 = b.m[11]; local b33 = b.m[15]
+
+    out_mat.m[0]  = a00*b00 + a10*b01 + a20*b02 + a30*b03
+    out_mat.m[1]  = a01*b00 + a11*b01 + a21*b02 + a31*b03
+    out_mat.m[2]  = a02*b00 + a12*b01 + a22*b02 + a32*b03
+    out_mat.m[3]  = a03*b00 + a13*b01 + a23*b02 + a33*b03
+
+    out_mat.m[4]  = a00*b10 + a10*b11 + a20*b12 + a30*b13
+    out_mat.m[5]  = a01*b10 + a11*b11 + a21*b12 + a31*b13
+    out_mat.m[6]  = a02*b10 + a12*b11 + a22*b12 + a32*b13
+    out_mat.m[7]  = a03*b10 + a13*b11 + a23*b12 + a33*b13
+
+    out_mat.m[8]  = a00*b20 + a10*b21 + a20*b22 + a30*b23
+    out_mat.m[9]  = a01*b20 + a11*b21 + a21*b22 + a31*b23
+    out_mat.m[10] = a02*b20 + a12*b21 + a22*b22 + a32*b23
+    out_mat.m[11] = a03*b20 + a13*b21 + a23*b22 + a33*b23
+
+    out_mat.m[12] = a00*b30 + a10*b31 + a20*b32 + a30*b33
+    out_mat.m[13] = a01*b30 + a11*b31 + a21*b32 + a31*b33
+    out_mat.m[14] = a02*b30 + a12*b31 + a22*b32 + a32*b33
+    out_mat.m[15] = a03*b30 + a13*b31 + a23*b32 + a33*b33
 end
 
 -- Strictly Standard Vulkan Orthographic [0, 1] Z-Space

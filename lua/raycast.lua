@@ -5,10 +5,13 @@ local cfg_sim = require("config_sim")
 
 local Raycast = {}
 
-local temp_vec_near = ffi.new("vec4_t")
-local temp_vec_far = ffi.new("vec4_t")
+-- [FIX APPLIED] Removed root-level temp_vec_near and temp_vec_far
 
 function Raycast.matrix_raycast_terrain(mouse_x, mouse_y, screen_w, screen_h, viewProj_inv, grid, net_identity)
+    -- [FIX APPLIED] Local allocation. LuaJIT sinks these to registers.
+    local temp_vec_near = ffi.new("vec4_t")
+    local temp_vec_far = ffi.new("vec4_t")
+
     local nx = (mouse_x / screen_w) * 2.0 - 1.0
     local ny = (mouse_y / screen_h) * 2.0 - 1.0
 
