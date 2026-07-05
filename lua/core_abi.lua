@@ -8,6 +8,9 @@ void* vx_sys_get_surface(int win_id);
 int vx_sys_get_resize_state(int win_id);
 void vx_sys_window_size(int win_id, int* w, int* h);
 
+// [OMNISCIENCE POLL] Phase-Gate synchronization
+int vx_sys_is_tenant_idle(int win_id);
+
 void vx_sys_dump_ring_state(int win_id);
 
 int vx_input_last_key(int win_id);

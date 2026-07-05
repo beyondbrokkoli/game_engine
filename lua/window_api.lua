@@ -30,6 +30,12 @@ end
 function WindowAPI.trigger_wsi_rebuild(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0) -- 3 = CMD_REBUILD_WSI
 end
+
+-- [NEW] Omniscience Poll to verify C-Core detachment
+function WindowAPI.is_tenant_idle(win_id)
+    return ffi.C.vx_sys_is_tenant_idle(win_id)
+end
+
 local _w_ptr = ffi.new("int[1]")
 local _h_ptr = ffi.new("int[1]")
 function WindowAPI.get_window_size(win_id)

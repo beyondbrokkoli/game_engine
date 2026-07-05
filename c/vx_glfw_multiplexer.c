@@ -246,6 +246,21 @@ EXPORT int vx_input_spacebar(int win_id) {
    Window System Helpers
 */
 
+EXPORT int vx_sys_is_tenant_idle(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return 1;
+
+    // We check two things:
+    // 1. Is the render thread actively looping on this tenant?
+    int busy = L(g_render_busy[win_id]);
+
+    // 2. Has the C-Core finished processing the WSI/Kill command?
+    int cmd = L(g_engine.mailbox.tenants[win_id].glfw_cmd);
+
+    // If it's not busy, AND the command mailbox has been cleared back to IDLE,
+    // we have absolute mathematical certainty that the Vulkan objects are safe to destroy.
+    return (busy == 0 && cmd == CMD_IDLE) ? 1 : 0;
+}
+
 EXPORT int vx_sys_get_resize_state(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return atomic_load_explicit(

@@ -369,10 +369,10 @@ local function main()
 
             -- [PHASE-GATE DYNAMIC TEARDOWN]
             if tenant.kill_state == 1 then
-                tenant.kill_wait = tenant.kill_wait + 1
-                -- Increased safety margin to 45 frames (~0.75s) to guarantee C-Core Idle
-                if tenant.kill_wait > 45 then
-                    print(string.format("[LUA CO] Tenant %d: Detached. Destroying Vulkan objects...", win_id))
+                -- [OMNISCIENCE CHECK] No more frame counting. We poll the exact atomic state.
+                if WindowAPI.is_tenant_idle(win_id) == 1 then
+                    print(string.format("[LUA CO] Tenant %d: C-Core confirmed IDLE. Destroying Vulkan objects...", win_id))
+
                     local swapchain_mod = require("swapchain")
                     local graphics_mod = require("graphics_pipeline")
                     local renderer_mod = require("renderer")
@@ -389,16 +389,13 @@ local function main()
 
                     -- Phase 2: Issue CMD_KILL_WINDOW to Main Thread
                     ffi.C.vx_sys_set_cmd(win_id, cfg_gfx.sys.kill, 0, 0)
-
                     tenant.kill_state = 2
-                    tenant.kill_wait = 0
                 end
                 goto continue_tenant
 
             elseif tenant.kill_state == 2 then
-                tenant.kill_wait = tenant.kill_wait + 1
-                -- Wait 15 frames for the OS to process glfwDestroyWindow
-                if tenant.kill_wait > 15 then
+                -- Poll until the OS window pointer is actually nullified by C
+                if WindowAPI.get_surface(win_id) == nil and WindowAPI.is_tenant_idle(win_id) == 1 then
                     print(string.format("[LUA CO] Tenant %d: OS Window destroyed. Slot freed.", win_id))
                     TenantRegistry.active[win_id] = nil
 
@@ -527,10 +524,26 @@ local function main()
         WindowAPI.trigger_wsi_rebuild(win_id)
     end
 
-    -- 2. Give the async Render Thread a fraction of a second to process the commands.
-    sys_sleep(50)
+    -- 2. THE OMNISCIENCE POLL: Deterministic atomic polling replaces the magic wait.
+    print("[LUA IO] Waiting for C-Core Render Multiplexer to acknowledge teardown...")
+    local all_idle = false
+    while not all_idle do
+        all_idle = true
+        for win_id, _ in pairs(TenantRegistry.active) do
+            if WindowAPI.is_tenant_idle(win_id) == 0 then
+                all_idle = false
+                break
+            end
+        end
 
-    -- Ensure the device is absolutely quiet.
+        -- Yield briefly to the OS thread scheduler so C-Core can finalize its work
+        if not all_idle then
+            sys_sleep(1)
+        end
+    end
+    print("[LUA IO] Absolute C-Core Idle Confirmed.")
+
+    -- Ensure the device is absolutely quiet. (Now completely safe to call)
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
     -- 3. Now the Render Thread has cleanly abandoned the tenants and reset the pools.
