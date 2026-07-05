@@ -136,6 +136,13 @@ local function main()
     local graphics_mod = require("graphics_pipeline")
     local manifest = require("pipeline_manifest")
 
+    -- [CRITICAL FIX]: Start the Global Async Threads!
+    -- The transfer family was established in step_3_logical_device
+    local transfer_family = vk_rt.tIndex or 0
+    EngineAPI.setup_transfer(transfer_family)
+    EngineAPI.start_thread()
+    print("[WEAVER] Global Async Overlord is LIVE.")
+
     -- 1. Boot Tenant 0 (Primary Game View)
     TenantRegistry.boot_tenant(vk_rt, 0, cfg_gfx.win.w, cfg_gfx.win.h, cfg_gfx.cfg.frame_slots)
     TenantRegistry.active[0].gfx = graphics_mod.Init(
