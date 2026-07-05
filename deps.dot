@@ -10,12 +10,9 @@ digraph WeaverEngine {
   "sequence" -> "vulkan_core";
   "sequence" -> "vulkan_core";
   "sequence" -> "memory";
-  "sequence" -> "swapchain";
   "sequence" -> "descriptors";
   "sequence" -> "memory";
   "sequence" -> "compute_pipeline";
-  "sequence" -> "graphics_pipeline";
-  "sequence" -> "renderer";
   "network" -> "ffi";
   "raycast" -> "ffi";
   "raycast" -> "vmath";

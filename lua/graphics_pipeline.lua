@@ -7,32 +7,29 @@ local vk_format, vk_image, vk_layout = reg.vk_format, reg.vk_image, reg.vk_layou
 
 local GraphicsPipeline = {}
 
--- DYNAMIC DELETION QUEUE (For Hot-Reloading)
 local DELETION_QUEUE_SIZE = 16
-local deletion_queue = {}
-for i = 0, DELETION_QUEUE_SIZE - 1 do
-    deletion_queue[i] = { active = false, frame_target = 0, pipelines = {}, modules = {} }
-end
-local d_head = 0
-local d_tail = 0
 
-function GraphicsPipeline.PumpDeletionQueue(vk, core_state, current_frame)
+-- [FIX APPLIED] Removed root-level deletion_queue, d_head, and d_tail.
+
+-- [UPDATED] Added gfx_state parameter to access the isolated queue
+function GraphicsPipeline.PumpDeletionQueue(vk, core_state, gfx_state, current_frame)
     local device = type(core_state) == "table" and core_state.device or core_state
-    while d_tail ~= d_head do
-        local item = deletion_queue[d_tail]
+
+    while gfx_state.d_tail ~= gfx_state.d_head do
+        local item = gfx_state.deletion_queue[gfx_state.d_tail]
         if current_frame < item.frame_target then break end
 
         for _, pipe in pairs(item.pipelines) do vk.vkDestroyPipeline(device, pipe, nil) end
         for _, mod in pairs(item.modules) do vk.vkDestroyShaderModule(device, mod, nil) end
 
-        -- Clear the tables for the next reuse
         item.pipelines = {}
         item.modules = {}
         item.active = false
-        d_tail = (d_tail + 1) % DELETION_QUEUE_SIZE
+        gfx_state.d_tail = (gfx_state.d_tail + 1) % DELETION_QUEUE_SIZE
     end
 end
 
+-- [Helper Functions Remain Unchanged]
 local function ReadShaderFile(filename)
     local file = io.open(filename, "rb")
     assert(file, "FATAL: Failed to open shader file: " .. filename)
@@ -161,35 +158,42 @@ function GraphicsPipeline.Init(vk, core_state, width, height, pipelineLayout, co
     })
     local pDepthView = ffi.new("VkImageView[1]"); assert(vk.vkCreateImageView(device, dViewInfo, nil, pDepthView) == 0)
 
+    -- [FIX APPLIED] Embed the queue inside the returned instance state
     local state = {
         depthImage = pDepthImage[0], depthMemory = pDepthMemory[0], depthImageView = pDepthView[0],
         pipelineLayout = pipelineLayout, colorFormat = colorFormat,
-        pipelines = {}, modules = {}, configs = configs
+        pipelines = {}, modules = {}, configs = configs,
+        deletion_queue = {},
+        d_head = 0,
+        d_tail = 0
     }
 
+    -- Initialize the isolated queue
+    for i = 0, DELETION_QUEUE_SIZE - 1 do
+        state.deletion_queue[i] = { active = false, frame_target = 0, pipelines = {}, modules = {} }
+    end
+
     for name, cfg in pairs(configs) do
-        -- Cache modules to prevent loading the same file twice
         if not state.modules[cfg.vert] then state.modules[cfg.vert] = createShaderModule(vk, device, cfg.vert) end
         if not state.modules[cfg.frag] then state.modules[cfg.frag] = createShaderModule(vk, device, cfg.frag) end
-
         state.pipelines[name] = BuildSinglePipeline(vk, device, pipelineLayout, colorFormat, state.modules[cfg.vert], state.modules[cfg.frag], cfg)
     end
 
     return state
 end
 
+-- [UPDATED] No signature change needed, but accesses gfx_state for isolated variables
 function GraphicsPipeline.HotReloadShaders(vk, core_state, gfx_state, current_frame)
     local device = core_state.device
-    local item = deletion_queue[d_head]
+    local item = gfx_state.deletion_queue[gfx_state.d_head]
 
-    -- Move current active state into the deletion queue
     item.active = true
     item.frame_target = current_frame + 4
     for k, v in pairs(gfx_state.pipelines) do item.pipelines[k] = v end
     for k, v in pairs(gfx_state.modules) do item.modules[k] = v end
-    d_head = (d_head + 1) % DELETION_QUEUE_SIZE
 
-    -- Rebuild from the saved configs!
+    gfx_state.d_head = (gfx_state.d_head + 1) % DELETION_QUEUE_SIZE
+
     gfx_state.pipelines = {}
     gfx_state.modules = {}
 
@@ -206,21 +210,21 @@ function GraphicsPipeline.Destroy(vk, core_state, gfx_state)
     if not gfx_state then return end
     local device = type(core_state) == "table" and core_state.device or core_state
 
-    -- Flush queue
-    while d_tail ~= d_head do
-        local item = deletion_queue[d_tail]
+    -- [UPDATED] Flush local tenant queue instead of global
+    while gfx_state.d_tail ~= gfx_state.d_head do
+        local item = gfx_state.deletion_queue[gfx_state.d_tail]
         for _, pipe in pairs(item.pipelines) do vk.vkDestroyPipeline(device, pipe, nil) end
         for _, mod in pairs(item.modules) do vk.vkDestroyShaderModule(device, mod, nil) end
-        d_tail = (d_tail + 1) % DELETION_QUEUE_SIZE
+        gfx_state.d_tail = (gfx_state.d_tail + 1) % DELETION_QUEUE_SIZE
     end
 
     for _, pipe in pairs(gfx_state.pipelines) do vk.vkDestroyPipeline(device, pipe, nil) end
     for _, mod in pairs(gfx_state.modules) do vk.vkDestroyShaderModule(device, mod, nil) end
 
-    -- Destroy the Depth Buffer
     if gfx_state.depthImageView then vk.vkDestroyImageView(device, gfx_state.depthImageView, nil) end
     if gfx_state.depthImage then vk.vkDestroyImage(device, gfx_state.depthImage, nil) end
     if gfx_state.depthMemory then vk.vkFreeMemory(device, gfx_state.depthMemory, nil) end
 end
 
 return GraphicsPipeline
+
