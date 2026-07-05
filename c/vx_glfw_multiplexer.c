@@ -1,10 +1,10 @@
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_glfw_multiplexer.c — GLFW window lifecycle, input callbacks,
    multi-tenant window tracking, and input query exports.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 #include "vx_glfw_multiplexer.h"
 
-/* ── File-Local State ───────────────────────────────────────────── */
+/* ── File-Local State */
 static bool    s_is_fullscreen[MAX_WINDOWS] = {false};
 static int     s_win_x[MAX_WINDOWS] = {0};
 static int     s_win_y[MAX_WINDOWS] = {0};
@@ -17,9 +17,9 @@ static bool    first_mouse[MAX_WINDOWS] = {true, true, true, true};
 
 static atomic_flag s_mouse_lock = ATOMIC_FLAG_INIT;
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    GLFW Callbacks
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 void glfw_cursor_callback(GLFWwindow* window, double xpos, double ypos) {
     int id = (int)(intptr_t)glfwGetWindowUserPointer(window);
@@ -176,9 +176,9 @@ void glfw_framebuffer_size_callback(GLFWwindow* window, int width,
     S(g_engine.mailbox.tenants[id].window_resized, 1);
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Input Query Exports
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 EXPORT int vx_input_last_key(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
@@ -228,12 +228,12 @@ EXPORT uint32_t vx_input_wasd(int win_id) {
 
 EXPORT float vx_input_mouse_dx(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    return E_R(g_engine.mailbox.tenants[win_id].mouse_dx, 0.0f);
+    return E_A(g_engine.mailbox.tenants[win_id].mouse_dx, 0.0f);
 }
 
 EXPORT float vx_input_mouse_dy(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0.0f;
-    return E_R(g_engine.mailbox.tenants[win_id].mouse_dy, 0.0f);
+    return E_A(g_engine.mailbox.tenants[win_id].mouse_dy, 0.0f);
 }
 
 EXPORT int vx_input_spacebar(int win_id) {
@@ -241,16 +241,17 @@ EXPORT int vx_input_spacebar(int win_id) {
     return L(g_engine.mailbox.tenants[win_id].key_space);
 }
 
+
+/*
+   Window System Helpers
+*/
+
 EXPORT int vx_sys_get_resize_state(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
     return atomic_load_explicit(
         &g_engine.mailbox.tenants[win_id].window_resized,
         memory_order_acquire);
 }
-
-/* ══════════════════════════════════════════════════════════════════
-   Window System Helpers
-   ══════════════════════════════════════════════════════════════════ */
 
 EXPORT const char** vx_sys_glfw_extensions(uint32_t* count) {
     return glfwGetRequiredInstanceExtensions(count);

@@ -1,10 +1,10 @@
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_global_state.c — Definitions for all shared global variables
    and implementations of ring/mailbox/lifecycle functions.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 #include "vx_global_state.h"
 
-/* ── Global Variable Definitions ────────────────────────────────── */
+/* ── Global Variable Definitions */
 
 EngineState g_engine;
 
@@ -29,7 +29,7 @@ VkCommandBuffer  g_render_cmd_buffers[MAX_WINDOWS][3];
 VkCommandBuffer  g_transfer_cmd_buffers[MAX_WINDOWS];
 VkFence          g_transfer_fences[MAX_WINDOWS];
 
-/* ── Threading Helpers ──────────────────────────────────────────── */
+/* ── Threading Helpers */
 
 vmath_thread_t vmath_thread_start(void* (*func)(void*), void* arg) {
     pthread_t thread;
@@ -41,7 +41,7 @@ void vmath_thread_join(vmath_thread_t thread) {
     pthread_join(thread, NULL);
 }
 
-/* ── Mailbox Bootstrap ──────────────────────────────────────────── */
+/* ── Mailbox Bootstrap */
 
 EXPORT void vx_init_mailbox(void) {
     atomic_init(&g_engine.mailbox.ready_index,  0);
@@ -85,7 +85,7 @@ EXPORT void vx_init_mailbox(void) {
     }
 }
 
-/* ── Lifecycle ──────────────────────────────────────────────────── */
+/* ── Lifecycle */
 
 EXPORT int vx_core_is_running(void) {
     return L_R(g_engine.mailbox.is_running);
@@ -99,7 +99,7 @@ EXPORT void vx_core_mark_finished(void) {
     S(g_engine.mailbox.lua_finished, 1);
 }
 
-/* ── Diagnostic ─────────────────────────────────────────────────── */
+/* ── Diagnostic */
 
 EXPORT void vx_sys_dump_ring_state(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
@@ -122,7 +122,7 @@ EXPORT void vx_sys_dump_ring_state(int win_id) {
     fflush(stdout);
 }
 
-/* ── Render Ring Stream API ─────────────────────────────────────── */
+/* ── Render Ring Stream API */
 
 EXPORT RenderPacket* vx_stream_packet(int idx) {
     if (idx < 0 || idx >= RING_SIZE) {
@@ -135,18 +135,25 @@ EXPORT RenderPacket* vx_stream_packet(int idx) {
 EXPORT int vx_stream_acquire(int win_id) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return -1;
 
-    uint32_t mask  = L(g_ring.locked_mask);
-    int      ready = L(g_ring.ready_idx[win_id]);
-    int      offset = win_id * 4;
+    int ready  = L(g_ring.ready_idx[win_id]);
+    int offset = win_id * 4;
 
     for (int i = 1; i <= 4; i++) {
-        int local_curr  = (ready == -1) ? -1 : (ready - offset);
-        int next_local  = (local_curr + i) % 4;
-        int global_idx  = offset + next_local;
+        int local_curr = (ready == -1) ? -1 : (ready - offset);
+        int next_local = (local_curr + i) % 4;
+        int global_idx = offset + next_local;
+        uint32_t bit   = (1u << global_idx);
 
-        if ((mask & (1u << global_idx)) == 0) {
-            FO(g_ring.locked_mask, (1u << global_idx));
-            return global_idx;
+        // Fresh read of the volatile state per slot attempt
+        uint32_t expected = L(g_ring.locked_mask);
+
+        // Loop purely to secure THIS specific slot
+        while ((expected & bit) == 0) {
+            if (CWX(g_ring.locked_mask, expected, expected | bit)) {
+                return global_idx; // Secured.
+            }
+            // If CWX fails, 'expected' is automatically updated with the latest mask.
+            // The while-condition immediately re-evaluates if our target bit is still free.
         }
     }
     return -1;
@@ -169,8 +176,8 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
         timeout--;
         if (timeout <= 0) {
             printf("[C-FATAL] Render thread failed to release busy flag "
-                   "for Tenant %d. Force overriding.\n", win_id);
-            break;
+                   "for Tenant %d. Aborting init to prevent corruption.\n", win_id);
+            return; // Abort instead of force overriding
         }
     }
 

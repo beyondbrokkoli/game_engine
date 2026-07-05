@@ -1,12 +1,12 @@
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_vulkan_render.c — Render-thread multiplexer, async transfer
    overlord, command recording, and thread lifecycle management.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 #include "vx_vulkan_render.h"
 
-/* ══════════════════════════════════════════════════════════════════
+/* 
    Tenant Allocation
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
                                       uint32_t gfx_family,
@@ -21,7 +21,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
         return;
     }
 
-    /* ── Render command pool + 3× command buffers ───────────────── */
+    /* ── Render command pool + 3× command buffers */
     if (g_render_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo r_pool_info = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -43,7 +43,7 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
                "explicitly allocated.\n", wid);
     }
 
-    /* ── Transfer command pool + buffer + fence ─────────────────── */
+    /* ── Transfer command pool + buffer + fence */
     if (g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo t_pool_info = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
@@ -74,9 +74,9 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
     }
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Transfer Ring
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 EXPORT void vx_transfer_setup(uint32_t q_family_index) {
     g_transfer_family_idx = q_family_index;
@@ -106,9 +106,9 @@ EXPORT int vx_transfer_request(int win_id, uint64_t src, uint64_t dst,
     return 0;
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Transfer Thread
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 static THREAD_FUNC transfer_thread_loop(void* arg) {
     printf("[C-CORE] Async Transfer Overlord Online.\n");
@@ -148,8 +148,9 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                                        VK_TRUE, 2000000000);
                 if (res == VK_TIMEOUT) {
                     printf("[C-FATAL] Tenant %d: GPU Transfer Hang "
-                           "detected!\n", wid);
+                           "detected! Marking tenant as dead.\n", wid);
                     S(job->status, 0);
+                    S(g_wsi_state[wid], 0); // Prevent further use of hung resources
                     break;
                 }
 
@@ -201,9 +202,9 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
     return NULL;
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Command Recording
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
                                DrawCommand* queue, uint32_t count,
@@ -217,7 +218,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
     };
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    /* ── Pre-pass barriers ──────────────────────────────────────── */
+    /* ── Pre-pass barriers */
     VkImageMemoryBarrier preBarriers[2] = {0};
 
     preBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -242,7 +243,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
         VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         0, 0, NULL, 0, NULL, 2, preBarriers);
 
-    /* ── Dynamic Rendering Begin ────────────────────────────────── */
+    /* ── Dynamic Rendering Begin */
     PFN_vkCmdBeginRenderingKHR pfnBegin =
         (PFN_vkCmdBeginRenderingKHR)win_wsi->pfnBegin;
     PFN_vkCmdEndRenderingKHR pfnEnd =
@@ -279,14 +280,14 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
 
     pfnBegin(cmd, &renderInfo);
 
-    /* ── Viewport / Scissor ─────────────────────────────────────── */
+    /* ── Viewport / Scissor */
     VkViewport viewport = {0.0f, 0.0f, (float)p->width, (float)p->height,
                            0.0f, 1.0f};
     VkRect2D   scissor  = {{0, 0}, {p->width, p->height}};
     vkCmdSetViewport(cmd, 0, 1, &viewport);
     vkCmdSetScissor(cmd, 0, 1, &scissor);
 
-    /* ── Draw Calls ─────────────────────────────────────────────── */
+    /* ── Draw Calls */
     if (count > 0 && p->vertex_buffer != 0 && p->index_buffer != 0) {
         VkDeviceSize offset = 0;
         VkBuffer vbo = (VkBuffer)p->vertex_buffer;
@@ -361,7 +362,7 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
 
     pfnEnd(cmd);
 
-    /* ── Present barrier ────────────────────────────────────────── */
+    /* ── Present barrier */
     VkImageMemoryBarrier presentBarrier = {
         .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
@@ -380,9 +381,9 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
     vkEndCommandBuffer(cmd);
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Render Thread Multiplexer
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 static THREAD_FUNC render_thread_loop(void* arg) {
     printf("[C-CORE] Async Render Multiplexer Online.\n");
@@ -391,7 +392,7 @@ static THREAD_FUNC render_thread_loop(void* arg) {
 
     while (L(g_render_thread_active) && L(g_engine.mailbox.is_running)) {
 
-        /* ── Handle pending WSI rebuilds ────────────────────────── */
+        /* ── Handle pending WSI rebuilds */
         for (int w = 0; w < MAX_WINDOWS; w++) {
             int cmd = atomic_load_explicit(
                 &g_engine.mailbox.tenants[w].glfw_cmd,
@@ -420,7 +421,7 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             }
         }
 
-        /* ── Per-tenant frame submission ────────────────────────── */
+        /* ── Per-tenant frame submission */
         for (int wid = 0; wid < MAX_WINDOWS; wid++) {
             int ready          = L(g_ring.ready_idx[wid]);
             int local_read_val = L(g_ring.local_read[wid]);
@@ -550,9 +551,9 @@ static THREAD_FUNC render_thread_loop(void* arg) {
     return NULL;
 }
 
-/* ══════════════════════════════════════════════════════════════════
+/*
    Thread Lifecycle
-   ══════════════════════════════════════════════════════════════════ */
+*/
 
 EXPORT void vx_thread_start(void) {
     S(g_render_thread_active,   1);

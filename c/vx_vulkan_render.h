@@ -1,9 +1,9 @@
 #pragma once
 
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_vulkan_render.h — Execution loops, command recording,
    transfer ring, and thread lifecycle.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 
 #include "vx_global_state.h"
 

@@ -1,9 +1,9 @@
 #pragma once
 
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_vulkan_core.h — Vulkan instance-level utilities and
    validation layer injection/ejection.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 
 #include "vx_global_state.h"
 

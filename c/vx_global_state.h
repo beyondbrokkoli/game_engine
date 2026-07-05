@@ -1,10 +1,10 @@
 #pragma once
 
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_global_state.h — Central repository for shared memory structures,
    ring buffer definitions, lock-free atomics, and global thread state.
    This is the shared contract between all domains.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,7 +21,7 @@
 #undef LOAD
 #undef STORE
 
-/* ── Atomic Convenience Macros ──────────────────────────────────── */
+/* ── Atomic Convenience Macros */
 #define L_R(v, ...)   atomic_load_explicit(&(v), memory_order_relaxed)
 #define L(v)          atomic_load_explicit(&(v), memory_order_acquire)
 #define S_R(v, x)     atomic_store_explicit(&(v), (x), memory_order_relaxed)
@@ -37,7 +37,7 @@
 #define TAS(v)        atomic_flag_test_and_set_explicit(&(v), memory_order_acquire)
 #define CLR(v)        atomic_flag_clear_explicit(&(v), memory_order_release)
 
-/* ── Platform / Threading ───────────────────────────────────────── */
+/* ── Platform / Threading */
 #include <pthread.h>
 #include <unistd.h>
 #define SLEEP_MS(ms) usleep((ms) * 1000)
@@ -59,14 +59,14 @@ typedef pthread_t vmath_thread_t;
 #define EXPORT __attribute__((visibility("default")))
 #endif
 
-/* ── Vulkan + GLFW ──────────────────────────────────────────────── */
+/* ── Vulkan + GLFW */
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 
 #define VX_ENABLE_VULKAN_STRUCTS
 #include "shared_structs.h"
 
-/* ── Engine Constants ───────────────────────────────────────────── */
+/* ── Engine Constants */
 #define CMD_IDLE           0
 #define CMD_BOOT_WINDOW    1
 #define CMD_KILL_WINDOW    2
@@ -75,7 +75,7 @@ typedef pthread_t vmath_thread_t;
 #define RING_SIZE          16
 #define TRANSFER_RING_SIZE 16
 
-/* ── Core Data Types ────────────────────────────────────────────── */
+/* ── Core Data Types */
 
 typedef struct {
     _Atomic(void*)  vk_instance;
@@ -137,7 +137,7 @@ typedef struct {
     alignas(64) _Atomic int status;
 } TransferJob;
 
-/* ── Extern Global State ────────────────────────────────────────── */
+/* ── Extern Global State */
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -162,7 +162,7 @@ extern VkCommandBuffer   g_render_cmd_buffers[MAX_WINDOWS][3];
 extern VkCommandBuffer   g_transfer_cmd_buffers[MAX_WINDOWS];
 extern VkFence           g_transfer_fences[MAX_WINDOWS];
 
-/* ── Global-State Function Prototypes ───────────────────────────── */
+/* ── Global-State Function Prototypes */
 vmath_thread_t  vmath_thread_start(void* (*func)(void*), void* arg);
 void            vmath_thread_join(vmath_thread_t thread);
 

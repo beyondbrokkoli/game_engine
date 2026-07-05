@@ -1,13 +1,13 @@
-/* ═══════════════════════════════════════════════════════════════════
+/*
    vx_vulkan_core.c — Debug messenger lifecycle and validation
    layer enforcement.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 #include "vx_vulkan_core.h"
 
-/* ── File-Local State ───────────────────────────────────────────── */
+/* ── File-Local State */
 static VkDebugUtilsMessengerEXT g_debugMessenger = VK_NULL_HANDLE;
 
-/* ── Debug Callback ─────────────────────────────────────────────── */
+/* ── Debug Callback */
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     VkDebugUtilsMessageSeverityFlagBitsEXT      messageSeverity,
@@ -24,7 +24,7 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL vulkan_debug_callback(
     return VK_FALSE;
 }
 
-/* ── Exports ────────────────────────────────────────────────────── */
+/* ── Exports */
 
 EXPORT void vx_sys_inject_validation(void* instance_ptr) {
     VkInstance instance = (VkInstance)instance_ptr;

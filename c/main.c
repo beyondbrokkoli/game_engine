@@ -1,8 +1,8 @@
-/* ═══════════════════════════════════════════════════════════════════
+/*
    main.c — Weaver Engine Host entry point.
    Bootstraps GLFW, spins the Lua VM thread, and runs the multi-tenant
    window multiplexer loop.
-   ═══════════════════════════════════════════════════════════════════ */
+*/
 #include "vx_global_state.h"
 #include "vx_glfw_multiplexer.h"
 #include "vx_vulkan_core.h"
@@ -12,7 +12,7 @@
 #include <lualib.h>
 #include <lauxlib.h>
 
-/* ── Lua Co-Overlord Thread ─────────────────────────────────────── */
+/* ── Lua Co-Overlord Thread */
 
 static THREAD_FUNC lua_co_overlord_loop(void* arg) {
     printf("[LUA-OS-THREAD] Booting Lua VM...\n");
@@ -30,7 +30,7 @@ static THREAD_FUNC lua_co_overlord_loop(void* arg) {
     return THREAD_RETURN_VAL;
 }
 
-/* ── Entry Point ────────────────────────────────────────────────── */
+/* ── Entry Point */
 
 int main(int argc, char** argv) {
     printf("[C-CORE] Booting Weaver Engine Host...\n");
@@ -50,14 +50,14 @@ int main(int argc, char** argv) {
 
     while (vx_core_is_running()) {
 
-        /* ── Poll if any window is alive ────────────────────────── */
+        /* ── Poll if any window is alive */
         bool has_windows = false;
         for (int i = 0; i < MAX_WINDOWS; i++) {
             if (windows[i] != NULL) { has_windows = true; break; }
         }
         if (has_windows) glfwPollEvents();
 
-        /* ── Per-tenant command dispatch ────────────────────────── */
+        /* ── Per-tenant command dispatch */
         for (int id = 0; id < MAX_WINDOWS; id++) {
             // 1. Use atomic_load (L) instead of atomic_exchange (E_A)!
             // Do not wipe the mailbox. Just peek at it.
@@ -100,6 +100,16 @@ int main(int argc, char** argv) {
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
             }
             else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
+                // Signal Render Thread to stop using this tenant's WSI
+                S(g_wsi_state[id], 0);
+
+                // Wait for Render Thread to finish any in-flight frames
+                int timeout = 2000;
+                while (L(g_render_busy[id]) && timeout > 0) {
+                    SLEEP_MS(1);
+                    timeout--;
+                }
+
                 glfwDestroyWindow(windows[id]);
                 windows[id] = NULL;
                 S(g_engine.mailbox.tenants[id].vk_surface, NULL);
@@ -109,7 +119,7 @@ int main(int argc, char** argv) {
                 printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
             }
 
-            /* ── Close-request intercept (all tenants) ──────────── */
+            /* ── Close-request intercept (all tenants) */
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
                 S(g_engine.mailbox.tenants[id].last_key_pressed,
                   GLFW_KEY_ESCAPE);
@@ -124,7 +134,7 @@ int main(int argc, char** argv) {
         SLEEP_MS(1);
     }
 
-    /* ── Shutdown ───────────────────────────────────────────────── */
+    /* ── Shutdown */
     printf("\n[C-CORE] Shutdown triggered. Waiting for Lua VM...\n");
 
     while (L(g_engine.mailbox.lua_finished) == 0) {
