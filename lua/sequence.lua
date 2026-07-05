@@ -14,12 +14,6 @@ local function step_1_instance(ctx)
     EngineAPI.publish_instance(ctx.win_id, ctx.vk_runtime.instance)
 end
 
-local function step_2_window(ctx)
-    print("[WEAVER] Ordering C-Core to Boot GLFW Window...")
-    WindowAPI.boot(ctx.win_id, cfg_gfx.win.w, cfg_gfx.win.h)
-    return "AWAIT_SURFACE"
-end
-
 local function step_3_logical_device(ctx)
     local vulkan = require("vulkan_core")
     local surface_ptr = WindowAPI.get_surface(ctx.win_id)
@@ -50,11 +44,6 @@ local function step_4_memory_arenas(ctx)
     print("[WEAVER] Strict VRAM Mapping Complete.")
 end
 
-local function step_5_swapchain(ctx)
-    local swapchain = require("swapchain")
-    local surface_ptr = WindowAPI.get_surface(ctx.win_id)
-    ctx.sc_state = swapchain.Init(ctx.vk_runtime.vk, ctx.vk_runtime, cfg_gfx.win.w, cfg_gfx.win.h, ctx.old_swapchain, surface_ptr)
-end
 
 local function step_6_descriptors(ctx)
     local descriptors = require("descriptors")
@@ -70,80 +59,19 @@ local function step_7_compute(ctx)
     ctx.comp_state = compute.Init(ctx.vk_runtime.vk, ctx.vk_runtime.device, layout, manifest.compute)
 end
 
-local function step_8_graphics(ctx)
-    local graphics = require("graphics_pipeline")
-    local layout = ctx.desc_state.pipelineLayout
-    local colorFormat = ctx.sc_state.format
-    ctx.gfx_state = graphics.Init(ctx.vk_runtime.vk, ctx.vk_runtime, cfg_gfx.win.w, cfg_gfx.win.h, layout, colorFormat, manifest.graphics)
-end
 
-local function step_9_sync(ctx)
-    local renderer = require("renderer")
-    ctx.sync_state = renderer.InitSync(ctx.vk_runtime.vk, ctx.vk_runtime.device, cfg_gfx.cfg.frame_slots)
-end
-
-local function step_10_overlord_handoff(ctx)
-    print("[WEAVER] Packing C-Core Mailbox and firing Render Thread...")
-    local vk, dev = ctx.vk_runtime.vk, ctx.vk_runtime.device
-    local sc, sync = ctx.sc_state, ctx.sync_state
-
-    local wsi = ffi.new("RenderThreadInit")
-    wsi.device = dev
-    wsi.queue = ctx.vk_runtime.queue
-    wsi.transfer_queue = ctx.vk_runtime.transferQueue
-    wsi.swapchain = sc.handle
-
-    for i = 0, sc.imageCount - 1 do
-        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
-        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
-    end
-
-    for i = 0, cfg_gfx.cfg.frame_slots - 1 do
-        wsi.image_available[i] = sync.imageAvailable[i]
-        wsi.render_finished[i] = sync.renderFinished[i]
-        wsi.in_flight[i]       = sync.inFlight[i]
-    end
-
-    wsi.vkWaitForFences         = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
-    wsi.vkAcquireNextImageKHR   = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
-    wsi.vkResetFences           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
-    wsi.vkQueueSubmit           = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
-    wsi.vkQueuePresentKHR       = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
-    wsi.pfnBegin                = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
-    wsi.pfnEnd                  = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
-    wsi.pfnSetCullMode          = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
-    wsi.pfnSetFrontFace         = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
-    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
-    wsi.pfnSetDepthTestEnable   = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
-    wsi.pfnSetDepthWriteEnable  = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
-    wsi.pfnSetDepthCompareOp    = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
-
-    -- [TRIFORCE PATCH]: Instruct C-core to allocate multiplexed command pools for this tenant
-    local gfx_family = ctx.vk_runtime.gIndex or 0
-    local transfer_family = ctx.vk_runtime.tIndex or 0
-    EngineAPI.allocate_tenant(ctx.win_id, wsi, gfx_family, transfer_family)
-
-    EngineAPI.setup_transfer(transfer_family)
-    EngineAPI.init_stream(ctx.win_id, wsi)
-    EngineAPI.start_thread()
-    print("[WEAVER] Engine Initialization Complete. Async Overlord is LIVE.")
-end
-
--- 2. THE STATIC SEQUENCE TABLE
+-- lua/sequence.lua (The New Sequence Table)
 local seq_boot = {
     { name = "Vulkan Instance", action = step_1_instance },
-    { name = "GLFW Window Boot", action = step_2_window },
     { name = "Vulkan Logical Device", action = step_3_logical_device },
     { name = "Memory Arenas Allocation", action = step_4_memory_arenas },
-    { name = "Swapchain Initialization", action = step_5_swapchain },
     { name = "Descriptors Matrix", action = step_6_descriptors },
-    { name = "Compute Graph Pipelines", action = step_7_compute },
-    { name = "Graphics Pipelines & Depth Buffer", action = step_8_graphics },
-    { name = "Renderer Synchronization", action = step_9_sync },
-    { name = "Async Overlord Handoff", action = step_10_overlord_handoff }
+    { name = "Compute Graph Pipelines", action = step_7_compute }
 }
 
-local seq_resize = { seq_boot[5], seq_boot[8], seq_boot[9] }
+-- You can also completely delete seq_resize from this file.
+-- The WSI rebuilder handles it now!
+local seq_resize = {}
 
 local SequenceModule = {}
 

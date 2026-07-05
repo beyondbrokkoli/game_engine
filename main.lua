@@ -129,34 +129,25 @@ local function main()
     local gfx = engine_ctx.gfx_state
     local sync = engine_ctx.sync_state
     local memory = require("memory")
+    local camera_mod = require("camera")
 
+    print("[LUA IO] Host Bedrock Online. Booting Multiplexer Tenants...")
+    local TenantRegistry = require("tenant_registry")
     local graphics_mod = require("graphics_pipeline")
     local manifest = require("pipeline_manifest")
 
-    -- [PHASE 1: MULTIPLEXER TENANT REGISTRY INITIATION]
-    local TenantRegistry = require("tenant_registry")
-    local camera_mod = require("camera")
+    -- 1. Boot Tenant 0 (Primary Game View)
+    TenantRegistry.boot_tenant(vk_rt, 0, cfg_gfx.win.w, cfg_gfx.win.h, cfg_gfx.cfg.frame_slots)
+    TenantRegistry.active[0].gfx = graphics_mod.Init(
+        vk_rt.vk, vk_rt,
+        cfg_gfx.win.w, cfg_gfx.win.h,
+        desc.pipelineLayout,
+        TenantRegistry.active[0].sc.format,
+        manifest.graphics
+    )
 
-    -- 1. Adopt the Primary Tenant
-    TenantRegistry.active[0] = {
-        win_id = 0,
-        suspended = false,
-        width = cfg_gfx.win.w,
-        height = cfg_gfx.win.h,
-        sc = sc,
-        sync = sync,
-        gfx = gfx,
-        cam = camera_mod.new(),
-        pc = ffi.new("PushConstants"),
-        inv_vp = ffi.new("mat4_t")
-    }
-    TenantRegistry.active[0].pc.aos_current_idx = 0
-    TenantRegistry.active[0].pc.aos_prev_idx = 0
-    TenantRegistry.active[0].pc.dt = 0.0
-
-    -- 2. Boot the Secondary Editor Tenant
+    -- 2. Boot Tenant 1 (Editor)
     TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
-
     TenantRegistry.active[1].gfx = graphics_mod.Init(
         vk_rt.vk, vk_rt,
         800, 600,
@@ -165,7 +156,7 @@ local function main()
         manifest.graphics
     )
 
-    -- 3. Boot Tenant 2
+    -- 3. Boot Tenant 2 (Reverse-Z Analytics)
     TenantRegistry.boot_tenant(vk_rt, 2, 800, 600, cfg_gfx.cfg.frame_slots)
     TenantRegistry.active[2].gfx = graphics_mod.Init(
         vk_rt.vk, vk_rt,
@@ -175,6 +166,7 @@ local function main()
         manifest.graphics
     )
 
+    -- (Optional) Boot Tenant 3 if you need it right away
     -- 4. Boot Tenant 3
     TenantRegistry.boot_tenant(vk_rt, 3, 800, 600, cfg_gfx.cfg.frame_slots)
     TenantRegistry.active[3].gfx = graphics_mod.Init(
