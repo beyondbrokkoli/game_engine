@@ -146,13 +146,14 @@ extern EngineState       g_engine;
 extern RenderRing        g_ring;
 extern RenderThreadInit  g_window_wsi[MAX_WINDOWS];
 extern atomic_int        g_wsi_state[MAX_WINDOWS];
-extern atomic_int        g_render_busy[MAX_WINDOWS];
+extern atomic_int g_render_busy[MAX_WINDOWS];
+extern atomic_int g_transfer_busy[MAX_WINDOWS]; // ADD THIS
 
 extern vmath_thread_t    g_render_thread;
 extern atomic_int        g_render_thread_active;
 
 extern TransferJob       g_transfer_ring[TRANSFER_RING_SIZE];
-extern uint32_t          g_transfer_family_idx;
+
 extern vmath_thread_t    g_transfer_thread;
 extern atomic_int        g_transfer_thread_active;
 

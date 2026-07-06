@@ -14,12 +14,13 @@ RenderRing g_ring;
 RenderThreadInit g_window_wsi[MAX_WINDOWS];
 atomic_int       g_wsi_state[MAX_WINDOWS];
 atomic_int       g_render_busy[MAX_WINDOWS];
+atomic_int       g_transfer_busy[MAX_WINDOWS]; // ADD THIS
 
 vmath_thread_t   g_render_thread;
 atomic_int       g_render_thread_active;
 
 TransferJob      g_transfer_ring[TRANSFER_RING_SIZE];
-uint32_t         g_transfer_family_idx = 0;
+
 vmath_thread_t   g_transfer_thread;
 atomic_int       g_transfer_thread_active;
 
@@ -77,6 +78,7 @@ EXPORT void vx_init_mailbox(void) {
     for (int i = 0; i < MAX_WINDOWS; i++) {
         atomic_init(&g_wsi_state[i], 0);
         atomic_init(&g_render_busy[i], 0);
+        atomic_init(&g_transfer_busy[i], 0);
         atomic_init(&g_ring.ready_idx[i], -1);
         atomic_init(&g_ring.local_read[i], -1);
         for (int f = 0; f < 10; f++) {
@@ -169,15 +171,16 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
 
     S(g_wsi_state[win_id], 0);
-
     int timeout = 2000;
-    while (L(g_render_busy[win_id])) {
+
+    // Update this loop to wait on BOTH threads
+    while (L(g_render_busy[win_id]) || L(g_transfer_busy[win_id])) {
         SLEEP_MS(1);
         timeout--;
         if (timeout <= 0) {
-            printf("[C-FATAL] Render thread failed to release busy flag "
+            printf("[C-FATAL] Threads failed to release busy flags "
                    "for Tenant %d. Aborting init to prevent corruption.\n", win_id);
-            return; // Abort instead of force overriding
+            return;
         }
     }
 

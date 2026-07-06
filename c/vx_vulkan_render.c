@@ -121,16 +121,20 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                 TransferJob* job = &g_transfer_ring[i];
                 int wid = job->target_window_id;
 
-                if (wid < 0 || wid >= MAX_WINDOWS ||
-                    L(g_wsi_state[wid]) == 0) {
+                // 1. Lock the transfer state FIRST
+                S(g_transfer_busy[wid], 1);
+
+                // 2. Mid-job check: Validate tenant state hasn't collapsed
+                if (wid < 0 || wid >= MAX_WINDOWS || L(g_wsi_state[wid]) == 0) {
                     S(job->status, 0);
+                    S(g_transfer_busy[wid], 0); // Safely unlock and abort
                     continue;
                 }
 
                 RenderThreadInit* wsi = &g_window_wsi[wid];
-                if (!wsi->device ||
-                    g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
+                if (!wsi->device || g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
                     S(job->status, 0);
+                    S(g_transfer_busy[wid], 0); // Safely unlock and abort
                     continue;
                 }
 
@@ -144,13 +148,12 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                 PFN_vkQueueSubmit   pfnSubmit =
                     (PFN_vkQueueSubmit)wsi->vkQueueSubmit;
 
-                VkResult res = pfnWait(wsi->device, 1, &fence,
-                                       VK_TRUE, 2000000000);
+                VkResult res = pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
                 if (res == VK_TIMEOUT) {
-                    printf("[C-FATAL] Tenant %d: GPU Transfer Hang "
-                           "detected! Marking tenant as dead.\n", wid);
+                    printf("[C-FATAL] Tenant %d: GPU Transfer Hang detected!\n", wid);
                     S(job->status, 0);
-                    S(g_wsi_state[wid], 0); // Prevent further use of hung resources
+                    S(g_wsi_state[wid], 0);
+                    S(g_transfer_busy[wid], 0); // ALWAYS unlock before breaking!
                     break;
                 }
 
@@ -191,6 +194,7 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                 pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
 
                 S(job->status, 0);
+                S(g_transfer_busy[wid], 0); // 3. Clean exit unlock
                 worked = true;
             }
         }
@@ -399,13 +403,18 @@ static THREAD_FUNC render_thread_loop(void* arg) {
                 memory_order_acquire);
 
             if (cmd == CMD_REBUILD_WSI) {
+                // 1. Phase-Gate Spinlock: Wait for transfer thread to yield this tenant
+                int timeout = 2000;
+                while (L(g_transfer_busy[w]) && timeout > 0) {
+                    SLEEP_MS(1);
+                    timeout--;
+                }
+
                 RenderThreadInit* wsi = &g_window_wsi[w];
                 if (wsi->device) {
-                    vkDeviceWaitIdle(wsi->device);
-
-                    // --- INJECT THIS: Purge Latent References ---
+                    vkDeviceWaitIdle(wsi->device); // Now 100% safe to idle
                     if (g_render_cmd_pools[w]) {
-                        vkResetCommandPool(wsi->device, g_render_cmd_pools[w], 0);
+                       vkResetCommandPool(wsi->device, g_render_cmd_pools[w], 0);
                     }
                     if (g_transfer_cmd_pools[w]) {
                         vkResetCommandPool(wsi->device, g_transfer_cmd_pools[w], 0);
