@@ -69,19 +69,15 @@ int main(int argc, char** argv) {
                 int w = L_R(g_engine.mailbox.tenants[id].glfw_arg_w);
                 int h = L_R(g_engine.mailbox.tenants[id].glfw_arg_h);
 
-                glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-                glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
+                glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API); glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
                 windows[id] = glfwCreateWindow(w, h, "Weaver Engine Editor", NULL, NULL);
-                glfwSetWindowUserPointer(windows[id], (void*)(intptr_t)id);
-                glfwSetWindowSizeLimits(windows[id], 640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE);
-                glfwShowWindow(windows[id]);
-                glfwSetWindowAttrib(windows[id], GLFW_FLOATING, GLFW_TRUE);
-                glfwFocusWindow(windows[id]);
+                glfwSetWindowUserPointer(windows[id], (void*)(intptr_t)id); glfwSetWindowSizeLimits(windows[id],
+                640, 360, GLFW_DONT_CARE, GLFW_DONT_CARE); glfwShowWindow(windows[id]);
+                glfwSetWindowAttrib(windows[id], GLFW_FLOATING, GLFW_TRUE); glfwFocusWindow(windows[id]);
                 glfwSetWindowAttrib(windows[id], GLFW_FLOATING, GLFW_FALSE);
                 glfwSetFramebufferSizeCallback(windows[id], glfw_framebuffer_size_callback);
-                glfwSetKeyCallback(windows[id], glfw_key_callback);
-                glfwSetCursorPosCallback(windows[id], glfw_cursor_callback);
-                glfwSetMouseButtonCallback(windows[id], glfw_mouse_button_callback);
+                glfwSetKeyCallback(windows[id], glfw_key_callback); glfwSetCursorPosCallback(windows[id],
+                glfw_cursor_callback); glfwSetMouseButtonCallback(windows[id], glfw_mouse_button_callback);
 
                 int fb_w, fb_h;
                 glfwGetFramebufferSize(windows[id], &fb_w, &fb_h);
