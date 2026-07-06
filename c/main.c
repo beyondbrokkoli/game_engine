@@ -100,12 +100,11 @@ int main(int argc, char** argv) {
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
             }
             else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
-                // Signal Render Thread to stop using this tenant's WSI
                 S(g_wsi_state[id], 0);
-
-                // Wait for Render Thread to finish any in-flight frames
                 int timeout = 2000;
-                while (L(g_render_busy[id]) && timeout > 0) {
+
+                // STRAGGLER FIX: Wait for BOTH threads to yield before destroying the OS window
+                while ((L(g_render_busy[id]) || L(g_transfer_busy[id])) && timeout > 0) {
                     SLEEP_MS(1);
                     timeout--;
                 }
@@ -113,8 +112,6 @@ int main(int argc, char** argv) {
                 glfwDestroyWindow(windows[id]);
                 windows[id] = NULL;
                 S(g_engine.mailbox.tenants[id].vk_surface, NULL);
-
-                // 2. Clear the command ONLY after we successfully process it
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
                 printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
             }
