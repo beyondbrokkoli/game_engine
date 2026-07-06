@@ -78,8 +78,9 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
    Transfer Ring
 */
 
-EXPORT void vx_transfer_setup(uint32_t q_family_index) {
-    g_transfer_family_idx = q_family_index;
+EXPORT void vx_transfer_setup(void) {
+    // g_transfer_family_idx = q_family_index; // <-- DELETED
+
     for (int i = 0; i < TRANSFER_RING_SIZE; i++) {
         atomic_init(&g_transfer_ring[i].status, 0);
     }
