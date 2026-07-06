@@ -413,10 +413,18 @@ static THREAD_FUNC render_thread_loop(void* arg) {
 
                 RenderThreadInit* wsi = &g_window_wsi[w];
                 if (wsi->device) {
-                    vkDeviceWaitIdle(wsi->device); // Now 100% safe to idle
+                    // THE SCALPEL: Drain only the queues bound to this specific tenant
+                    if (wsi->queue) {
+                        vkQueueWaitIdle(wsi->queue);
+                    }
+                    if (wsi->transfer_queue) {
+                        vkQueueWaitIdle(wsi->transfer_queue);
+                    }
+
                     if (g_render_cmd_pools[w]) {
                        vkResetCommandPool(wsi->device, g_render_cmd_pools[w], 0);
                     }
+
                     if (g_transfer_cmd_pools[w]) {
                         vkResetCommandPool(wsi->device, g_transfer_cmd_pools[w], 0);
                     }
