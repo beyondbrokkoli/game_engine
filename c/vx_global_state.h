@@ -40,7 +40,28 @@
 /* ── Platform / Threading */
 #include <pthread.h>
 #include <unistd.h>
+#include <sched.h> /* Required for sched_yield() */
 #define SLEEP_MS(ms) usleep((ms) * 1000)
+
+/* ── Tiered Backoff Spinlock Wait */
+static inline void vx_spin_wait(int* spin_count) {
+    if (*spin_count < 1000) {
+        // Tier 1: Pause CPU pipeline to save power (Nanoseconds)
+        _mm_pause();
+    } else if (*spin_count < 2000) {
+        // Tier 2: Yield to OS scheduler (Microseconds)
+        #if defined(_WIN32)
+            SwitchToThread();
+        #else
+            sched_yield();
+        #endif
+    } else {
+        // Tier 3: Hard yield (Milliseconds)
+        SLEEP_MS(1);
+    }
+    (*spin_count)++;
+}
+
 typedef pthread_t vmath_thread_t;
 #define THREAD_FUNC        void*
 #define THREAD_RETURN_VAL NULL

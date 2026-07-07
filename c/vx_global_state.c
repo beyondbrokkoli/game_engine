@@ -172,16 +172,17 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
 
     S(g_wsi_state[win_id], 0);
     int timeout = 2000;
+    int spin_count = 0;
 
     // Update this loop to wait on BOTH threads
     while (L(g_render_busy[win_id]) || L(g_transfer_busy[win_id])) {
-        SLEEP_MS(1);
-        timeout--;
+        if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
         if (timeout <= 0) {
             printf("[C-FATAL] Threads failed to release busy flags "
                    "for Tenant %d. Aborting init to prevent corruption.\n", win_id);
             return;
         }
+        vx_spin_wait(&spin_count);
     }
 
     g_window_wsi[win_id] = *wsi;

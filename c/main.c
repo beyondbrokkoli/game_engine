@@ -50,12 +50,7 @@ int main(int argc, char** argv) {
 
     while (vx_core_is_running()) {
 
-        /* ── Poll if any window is alive */
-        bool has_windows = false;
-        for (int i = 0; i < MAX_WINDOWS; i++) {
-            if (windows[i] != NULL) { has_windows = true; break; }
-        }
-        if (has_windows) glfwPollEvents();
+        glfwPollEvents();
 
         /* ── Per-tenant command dispatch */
         for (int id = 0; id < MAX_WINDOWS; id++) {
@@ -98,11 +93,12 @@ int main(int argc, char** argv) {
             else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
                 S(g_wsi_state[id], 0);
                 int timeout = 2000;
+                int spin_count = 0;
 
                 // STRAGGLER FIX: Wait for BOTH threads to yield before destroying the OS window
                 while ((L(g_render_busy[id]) || L(g_transfer_busy[id])) && timeout > 0) {
-                    SLEEP_MS(1);
-                    timeout--;
+                    if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
+                    vx_spin_wait(&spin_count);
                 }
 
                 glfwDestroyWindow(windows[id]);
@@ -130,8 +126,9 @@ int main(int argc, char** argv) {
     /* ── Shutdown */
     printf("\n[C-CORE] Shutdown triggered. Waiting for Lua VM...\n");
 
+    int spin_count = 0;
     while (L(g_engine.mailbox.lua_finished) == 0) {
-        SLEEP_MS(1);
+        vx_spin_wait(&spin_count);
     }
 
     vmath_thread_join(lua_thread);

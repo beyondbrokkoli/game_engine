@@ -406,9 +406,10 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             if (cmd == CMD_REBUILD_WSI) {
                 // 1. Phase-Gate Spinlock: Wait for transfer thread to yield this tenant
                 int timeout = 2000;
+                int spin_count = 0;
                 while (L(g_transfer_busy[w]) && timeout > 0) {
-                    SLEEP_MS(1);
-                    timeout--;
+                    if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
+                    vx_spin_wait(&spin_count);
                 }
 
                 RenderThreadInit* wsi = &g_window_wsi[w];
