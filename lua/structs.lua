@@ -53,9 +53,9 @@ M.specs = {
             { type = "uint32_t", name = "status" }, -- 0 = INACTIVE, 1 = ACTIVE, 2 = RETIRING
             { type = "uint64_t", name = "swapchain_images", count = 10 },
             { type = "uint64_t", name = "swapchain_views", count = 10 },
-            { type = "VkSemaphore", name = "image_available", count = 3 },
-            { type = "VkSemaphore", name = "render_finished", count = 3 },
-            { type = "VkFence", name = "in_flight", count = 3 },
+            { type = "VkSemaphore", name = "image_available", count = 10 },
+            { type = "VkSemaphore", name = "render_finished", count = 10 },
+            { type = "VkFence", name = "in_flight", count = 10 },
             { type = "VkFence", name = "images_in_flight_fences", count = 10 }
         }
     },
