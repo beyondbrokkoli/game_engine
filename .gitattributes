@@ -1,0 +1,5 @@
+# Mark as generated so GitHub ignores it in language stats but keeps it in the repo
+lua/vulkan_headers.lua linguist-generated=true
+
+# You can also mark third-party dependencies as vendored to exclude them
+lua/dkjson.lua linguist-vendored=true
