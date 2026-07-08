@@ -84,6 +84,9 @@ local function pure_pack_frame(tenant_ctx, write_idx, pc, rts_grid, vram_templat
     packet.width = sc.extent.width
     packet.height = sc.extent.height
 
+    -- [INJECTED ZOMBIE PROTOCOL LOCK]
+    packet.swapchain_generation = tenant_ctx.generation
+
     local draw_count = 0
 
     if active_render_mode == cfg_gfx.mode.dual then
