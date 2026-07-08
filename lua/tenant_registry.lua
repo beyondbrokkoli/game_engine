@@ -55,6 +55,12 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     -- 4. Populate the VOLATILE Swapchain Context (Zombie Protocol Boot Sequence)
     WindowAPI.prepare_new_wsi(win_id, width, height)
 
+    -- [INJECTED PHASE-GATE]: Wait for C-Core to zero the slot and idle!
+    while WindowAPI.is_tenant_idle(win_id) == 0 do
+        -- A tiny yield to prevent locking the CPU
+        ffi.C.usleep(1000)
+    end
+
     local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
     local dormant_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
 

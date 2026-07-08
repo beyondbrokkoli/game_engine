@@ -430,7 +430,12 @@ local function main()
                     -- 1. Signal C to prepare the inactive slot (zero memory and wait)
                     WindowAPI.prepare_new_wsi(win_id, new_w, new_h)
 
-                    -- 2. Fetch C-Pointers and Generation
+                    -- [INJECTED PHASE-GATE]: Wait for the memory wipe to finish!
+                    while WindowAPI.is_tenant_idle(win_id) == 0 do
+                        sys_sleep(1)
+                    end
+
+                    -- 2. NOW it is safe to Fetch C-Pointers and Generation
                     local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
                     local inactive_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
 
