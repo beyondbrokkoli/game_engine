@@ -8,16 +8,23 @@ local function enforce_strict_invariants(specs)
     local found_structs = {}
     for _, struct in ipairs(specs) do found_structs[struct.name] = struct end
 
-    local rt_init = found_structs["RenderThreadInit"]
-    assert(rt_init, "[FATAL] Gremlin removed RenderThreadInit!")
+    -- --- NEW: Device Context Check ---
+    local dev_ctx = found_structs["VulkanDeviceContext"]
+    assert(dev_ctx, "[FATAL] Gremlin removed VulkanDeviceContext!")
+
+    -- --- NEW: Volatile WSI Context Check ---
+    local wsi_ctx = found_structs["VulkanSwapchainContext"]
+    assert(wsi_ctx, "[FATAL] Gremlin removed VulkanSwapchainContext!")
+
     local wsi_found, swapchain_arr_found = false, false
-    for _, m in ipairs(rt_init.members) do
+    for _, m in ipairs(wsi_ctx.members) do
         if m.name == "swapchain" and m.type == "VkSwapchainKHR" then wsi_found = true end
         if m.name == "swapchain_images" and m.count == 10 then swapchain_arr_found = true end
     end
-    assert(wsi_found, "[FATAL INVARIANT] RenderThreadInit missing VkSwapchainKHR. Mux broken!")
-    assert(swapchain_arr_found, "[FATAL INVARIANT] RenderThreadInit swapchain_images missing/altered!")
+    assert(wsi_found, "[FATAL INVARIANT] VulkanSwapchainContext missing VkSwapchainKHR. Mux broken!")
+    assert(swapchain_arr_found, "[FATAL INVARIANT] VulkanSwapchainContext swapchain_images missing/altered!")
 
+    -- --- Keep RenderPacket Check ---
     local r_packet = found_structs["RenderPacket"]
     assert(r_packet, "[FATAL] Gremlin removed RenderPacket!")
     local target_win_found = false
@@ -27,6 +34,7 @@ local function enforce_strict_invariants(specs)
     assert(target_win_found, "[FATAL INVARIANT] RenderPacket missing 'target_window_id'.")
     assert(r_packet.force_align and r_packet.align == 64, "[FATAL INVARIANT] RenderPacket not 64-byte aligned!")
 
+    -- --- Keep Lockstep Check ---
     local lockstep = found_structs["LockstepPacket"]
     assert(lockstep, "[FATAL] Gremlin removed LockstepPacket!")
     assert(lockstep.wire_format == true, "[FATAL INVARIANT] LockstepPacket not wire_format!")

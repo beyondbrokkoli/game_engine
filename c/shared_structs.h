@@ -23,14 +23,8 @@ typedef struct  {
     VkDevice device;
     VkQueue queue;
     VkQueue transfer_queue;
-    VkSwapchainKHR swapchain;
     uint32_t max_frames_in_flight;
     uint8_t _pad_auto_0[4];
-    uint64_t swapchain_images[10];
-    uint64_t swapchain_views[10];
-    VkSemaphore image_available[10];
-    VkSemaphore render_finished[10];
-    VkFence in_flight[10];
     void* vkWaitForFences;
     void* vkAcquireNextImageKHR;
     void* vkResetFences;
@@ -44,7 +38,22 @@ typedef struct  {
     void* pfnSetDepthTestEnable;
     void* pfnSetDepthWriteEnable;
     void* pfnSetDepthCompareOp;
-} RenderThreadInit;
+} VulkanDeviceContext;
+
+#endif // VX_ENABLE_VULKAN_STRUCTS
+
+#ifdef VX_ENABLE_VULKAN_STRUCTS
+typedef struct  {
+    VkSwapchainKHR swapchain;
+    uint32_t status;
+    uint8_t _pad_auto_0[4];
+    uint64_t swapchain_images[10];
+    uint64_t swapchain_views[10];
+    VkSemaphore image_available[3];
+    VkSemaphore render_finished[3];
+    VkFence in_flight[3];
+    VkFence images_in_flight_fences[10];
+} VulkanSwapchainContext;
 
 #endif // VX_ENABLE_VULKAN_STRUCTS
 
@@ -102,13 +111,12 @@ typedef struct __attribute__((aligned(64))) {
     uint64_t gfx_layout;
     uint64_t vertex_buffer;
     uint64_t index_buffer;
-    uint64_t swapchain_image;
-    uint64_t swapchain_view;
     uint64_t depth_image;
     uint64_t depth_view;
     uint32_t width;
     uint32_t height;
-    uint8_t _pad_tail[48];
+    uint32_t swapchain_generation;
+    uint8_t _pad_tail[60];
 } RenderPacket;
 
 #pragma pack(push, 1)

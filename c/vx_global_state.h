@@ -92,6 +92,9 @@ typedef pthread_t vmath_thread_t;
 #define CMD_BOOT_WINDOW    1
 #define CMD_KILL_WINDOW    2
 #define CMD_REBUILD_WSI    3
+// Add to c/vx_global_state.h
+#define CMD_PREPARE_NEW_WSI 4
+#define CMD_FLIP_WSI 5
 #define MAX_WINDOWS        4
 #define RING_SIZE          16
 #define TRANSFER_RING_SIZE 16
@@ -204,6 +207,7 @@ EXPORT int           vx_stream_acquire(int win_id);
 EXPORT void          vx_stream_commit(int win_id, int idx);
 // UPDATED SIGNATURE:
 EXPORT void          vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx);
+EXPORT void vx_pump_zombie_gc(void);
 
 #ifdef __cplusplus
 }

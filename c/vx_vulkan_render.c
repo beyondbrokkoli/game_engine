@@ -270,17 +270,17 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
         vkCmdBindIndexBuffer(cmd, ibo, 0, VK_INDEX_TYPE_UINT32);
 
         PFN_vkCmdSetCullModeEXT vkCmdSetCullModeEXT =
-            (PFN_vkCmdSetCullModeEXT)win_wsi->pfnSetCullMode;
+            (PFN_vkCmdSetCullModeEXT)dev_ctx->pfnSetCullMode;
         PFN_vkCmdSetFrontFaceEXT vkCmdSetFrontFaceEXT =
-            (PFN_vkCmdSetFrontFaceEXT)win_wsi->pfnSetFrontFace;
+            (PFN_vkCmdSetFrontFaceEXT)dev_ctx->pfnSetFrontFace;
         PFN_vkCmdSetPrimitiveTopologyEXT vkCmdSetPrimitiveTopologyEXT =
-            (PFN_vkCmdSetPrimitiveTopologyEXT)win_wsi->pfnSetPrimitiveTopology;
+            (PFN_vkCmdSetPrimitiveTopologyEXT)dev_ctx->pfnSetPrimitiveTopology;
         PFN_vkCmdSetDepthTestEnableEXT vkCmdSetDepthTestEnableEXT =
-            (PFN_vkCmdSetDepthTestEnableEXT)win_wsi->pfnSetDepthTestEnable;
+            (PFN_vkCmdSetDepthTestEnableEXT)dev_ctx->pfnSetDepthTestEnable;
         PFN_vkCmdSetDepthWriteEnableEXT vkCmdSetDepthWriteEnableEXT =
-            (PFN_vkCmdSetDepthWriteEnableEXT)win_wsi->pfnSetDepthWriteEnable;
+            (PFN_vkCmdSetDepthWriteEnableEXT)dev_ctx->pfnSetDepthWriteEnable;
         PFN_vkCmdSetDepthCompareOpEXT vkCmdSetDepthCompareOpEXT =
-            (PFN_vkCmdSetDepthCompareOpEXT)win_wsi->pfnSetDepthCompareOp;
+            (PFN_vkCmdSetDepthCompareOpEXT)dev_ctx->pfnSetDepthCompareOp;
 
         uint64_t current_pipeline   = 0;
         uint64_t current_descriptor = 0;
@@ -351,6 +351,76 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
     vkEndCommandBuffer(cmd);
 }
 
+EXPORT void vx_pump_zombie_gc(void) {
+    for (int wid = 0; wid < MAX_WINDOWS; wid++) {
+        // Use acquire semantics (L) to ensure we see the flip memory barriers
+        uint32_t active_gen = L(g_wsi_generation[wid]);
+        uint32_t inactive_idx = (active_gen + 1) % 2;
+
+        VulkanSwapchainContext* zombie = &g_wsi_ctx[wid][inactive_idx];
+
+        // --- ATOMIC CAST FIX ---
+        // Explicitly cast to _Atomic to bypass Lua SSoT uint32_t restrictions
+        if (atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed) == 2) {
+
+            VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
+            bool safe_to_destroy = true;
+
+            // 1. Poll all 10 out-of-order tracking fences.
+            // If ANY fence is still VK_NOT_READY, the GPU is still using the Zombie.
+            for (int i = 0; i < 10; i++) {
+                if (zombie->images_in_flight_fences[i] != VK_NULL_HANDLE) {
+                    VkResult res = vkGetFenceStatus(dev_ctx->device, zombie->images_in_flight_fences[i]);
+                    if (res == VK_NOT_READY) {
+                        safe_to_destroy = false;
+                        break;
+                    }
+                }
+            }
+
+            if (safe_to_destroy) {
+                // 2. AUTOCOMPLETED DESTRUCTION LOGIC
+
+                // A. Destroy Swapchain Views (Max 10)
+                for (int i = 0; i < 10; i++) {
+                    if (zombie->swapchain_views[i] != 0) {
+                        vkDestroyImageView(dev_ctx->device, (VkImageView)zombie->swapchain_views[i], NULL);
+                        zombie->swapchain_views[i] = 0;
+                    }
+                }
+
+                // B. Destroy Sync Primitives (Max 3, explicitly mapped to frames-in-flight)
+                for (int i = 0; i < 3; i++) {
+                    if (zombie->image_available[i] != VK_NULL_HANDLE) {
+                        vkDestroySemaphore(dev_ctx->device, zombie->image_available[i], NULL);
+                        zombie->image_available[i] = VK_NULL_HANDLE;
+                    }
+                    if (zombie->render_finished[i] != VK_NULL_HANDLE) {
+                        vkDestroySemaphore(dev_ctx->device, zombie->render_finished[i], NULL);
+                        zombie->render_finished[i] = VK_NULL_HANDLE;
+                    }
+                    if (zombie->in_flight[i] != VK_NULL_HANDLE) {
+                        vkDestroyFence(dev_ctx->device, zombie->in_flight[i], NULL);
+                        zombie->in_flight[i] = VK_NULL_HANDLE;
+                    }
+                }
+
+                // C. Destroy the Swapchain KHR
+                if (zombie->swapchain != VK_NULL_HANDLE) {
+                    vkDestroySwapchainKHR(dev_ctx->device, zombie->swapchain, NULL);
+                    zombie->swapchain = VK_NULL_HANDLE;
+                }
+
+                // --- ATOMIC CAST FIX ---
+                // Mark as 0 (INACTIVE) so Lua can safely populate it on the next resize
+                atomic_store_explicit((_Atomic uint32_t*)&zombie->status, 0, memory_order_release);
+
+                printf("[C-CORE] Tenant %d: Zombie Swapchain (Gen %d) safely garbage collected.\n", wid, active_gen - 1);
+            }
+        }
+    }
+}
+
 /*
    Render Thread Multiplexer
 */
@@ -377,24 +447,26 @@ static THREAD_FUNC render_thread_loop(void* arg) {
                     vx_spin_wait(&spin_count);
                 }
 
-                RenderThreadInit* wsi = &g_window_wsi[w];
-                if (wsi->device) {
+                // --- NOTE 2 PATCH: Use VulkanDeviceContext ---
+                VulkanDeviceContext* dev_ctx = &g_device_ctx[w];
+                if (dev_ctx->device) {
                     // THE SCALPEL: Drain only the queues bound to this specific tenant
-                    if (wsi->queue) {
-                        vkQueueWaitIdle(wsi->queue);
+                    if (dev_ctx->queue) {
+                        vkQueueWaitIdle(dev_ctx->queue);
                     }
-                    if (wsi->transfer_queue) {
-                        vkQueueWaitIdle(wsi->transfer_queue);
+                    if (dev_ctx->transfer_queue) {
+                        vkQueueWaitIdle(dev_ctx->transfer_queue);
                     }
 
                     if (g_render_cmd_pools[w]) {
-                       vkResetCommandPool(wsi->device, g_render_cmd_pools[w], 0);
+                       vkResetCommandPool(dev_ctx->device, g_render_cmd_pools[w], 0);
                     }
 
                     if (g_transfer_cmd_pools[w]) {
-                        vkResetCommandPool(wsi->device, g_transfer_cmd_pools[w], 0);
+                        vkResetCommandPool(dev_ctx->device, g_transfer_cmd_pools[w], 0);
                     }
                 }
+
                 S(g_wsi_state[w], 0);
                 atomic_store_explicit(
                     &g_engine.mailbox.tenants[w].window_resized, 0,
@@ -558,21 +630,22 @@ EXPORT void vx_thread_kill(void) {
     S(g_ring.locked_mask, 0);
 
     for (int i = 0; i < MAX_WINDOWS; i++) {
-        if (g_window_wsi[i].device) {
-            vkDeviceWaitIdle(g_window_wsi[i].device);
+        if (g_device_ctx[i].device) {
+            vkDeviceWaitIdle(g_device_ctx[i].device);
         }
         if (g_render_cmd_pools[i]) {
-            vkDestroyCommandPool(g_window_wsi[i].device,
-                                 g_render_cmd_pools[i], NULL);
+            vkDestroyCommandPool(g_device_ctx[i].device, g_render_cmd_pools[i], NULL);
             g_render_cmd_pools[i] = VK_NULL_HANDLE;
         }
+
+        // --- NOTE 3 PATCH: Use g_device_ctx for transfer destruction ---
         if (g_transfer_cmd_pools[i]) {
-            vkDestroyCommandPool(g_window_wsi[i].device,
+            vkDestroyCommandPool(g_device_ctx[i].device,
                                  g_transfer_cmd_pools[i], NULL);
             g_transfer_cmd_pools[i] = VK_NULL_HANDLE;
         }
         if (g_transfer_fences[i]) {
-            vkDestroyFence(g_window_wsi[i].device,
+            vkDestroyFence(g_device_ctx[i].device,
                            g_transfer_fences[i], NULL);
             g_transfer_fences[i] = VK_NULL_HANDLE;
         }
