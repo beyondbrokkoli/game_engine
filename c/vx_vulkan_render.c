@@ -4,32 +4,23 @@
 */
 #include "vx_vulkan_render.h"
 
-/* 
+/*
    Tenant Allocation
 */
 
-EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
+EXPORT void vx_stream_allocate_tenant(int wid, VulkanDeviceContext* dev_ctx,
                                       uint32_t gfx_family,
                                       uint32_t transfer_family) {
-    if (wid < 0 || wid >= MAX_WINDOWS) {
-        printf("[C-ERROR] Blocked out-of-bounds tenant allocation: %d\n", wid);
-        return;
-    }
-    if (!wsi || !wsi->device) {
-        printf("[C-ERROR] Failed to allocate tenant %d: "
-               "Invalid WSI or Device.\n", wid);
-        return;
-    }
+    if (wid < 0 || wid >= MAX_WINDOWS) return;
+    if (!dev_ctx || !dev_ctx->device) return;
 
-    /* ── Render command pool + 3× command buffers */
     if (g_render_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo r_pool_info = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = gfx_family
         };
-        vkCreateCommandPool(wsi->device, &r_pool_info, NULL,
-                            &g_render_cmd_pools[wid]);
+        vkCreateCommandPool(dev_ctx->device, &r_pool_info, NULL, &g_render_cmd_pools[wid]);
 
         VkCommandBufferAllocateInfo r_alloc_info = {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -37,21 +28,16 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 3
         };
-        vkAllocateCommandBuffers(wsi->device, &r_alloc_info,
-                                 g_render_cmd_buffers[wid]);
-        printf("[C-CORE] Tenant %d: Render pool and 3x command buffers "
-               "explicitly allocated.\n", wid);
+        vkAllocateCommandBuffers(dev_ctx->device, &r_alloc_info, g_render_cmd_buffers[wid]);
     }
 
-    /* ── Transfer command pool + buffer + fence */
     if (g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
         VkCommandPoolCreateInfo t_pool_info = {
             .sType            = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO,
             .flags            = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT,
             .queueFamilyIndex = transfer_family
         };
-        vkCreateCommandPool(wsi->device, &t_pool_info, NULL,
-                            &g_transfer_cmd_pools[wid]);
+        vkCreateCommandPool(dev_ctx->device, &t_pool_info, NULL, &g_transfer_cmd_pools[wid]);
 
         VkCommandBufferAllocateInfo t_alloc_info = {
             .sType              = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO,
@@ -59,18 +45,13 @@ EXPORT void vx_stream_allocate_tenant(int wid, RenderThreadInit* wsi,
             .level              = VK_COMMAND_BUFFER_LEVEL_PRIMARY,
             .commandBufferCount = 1
         };
-        vkAllocateCommandBuffers(wsi->device, &t_alloc_info,
-                                 &g_transfer_cmd_buffers[wid]);
+        vkAllocateCommandBuffers(dev_ctx->device, &t_alloc_info, &g_transfer_cmd_buffers[wid]);
 
         VkFenceCreateInfo fence_info = {
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = 1
         };
-        vkCreateFence(wsi->device, &fence_info, NULL,
-                      &g_transfer_fences[wid]);
-
-        printf("[C-CORE] Tenant %d: Transfer pool, buffer, and fence "
-               "explicitly allocated.\n", wid);
+        vkCreateFence(dev_ctx->device, &fence_info, NULL, &g_transfer_fences[wid]);
     }
 }
 
@@ -132,24 +113,22 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                     continue;
                 }
 
-                RenderThreadInit* wsi = &g_window_wsi[wid];
-                if (!wsi->device || g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
+                VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
+                if (!dev_ctx->device || g_transfer_cmd_pools[wid] == VK_NULL_HANDLE) {
                     S(job->status, 0);
-                    S(g_transfer_busy[wid], 0); // Safely unlock and abort
+                    S(g_transfer_busy[wid], 0);
                     continue;
                 }
 
                 VkCommandBuffer cmd   = g_transfer_cmd_buffers[wid];
                 VkFence         fence = g_transfer_fences[wid];
 
-                PFN_vkWaitForFences pfnWait   =
-                    (PFN_vkWaitForFences)wsi->vkWaitForFences;
-                PFN_vkResetFences   pfnReset  =
-                    (PFN_vkResetFences)wsi->vkResetFences;
-                PFN_vkQueueSubmit   pfnSubmit =
-                    (PFN_vkQueueSubmit)wsi->vkQueueSubmit;
+                PFN_vkWaitForFences pfnWait   = (PFN_vkWaitForFences)dev_ctx->vkWaitForFences;
+                PFN_vkResetFences   pfnReset  = (PFN_vkResetFences)dev_ctx->vkResetFences;
+                PFN_vkQueueSubmit   pfnSubmit = (PFN_vkQueueSubmit)dev_ctx->vkQueueSubmit;
 
-                VkResult res = pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
+                VkResult res = pfnWait(dev_ctx->device, 1, &fence, VK_TRUE, 2000000000);
+                // ... [rest of transfer logic remains the same, but pass dev_ctx->device and dev_ctx->transfer_queue to vk calls] ...
                 if (res == VK_TIMEOUT) {
                     printf("[C-FATAL] Tenant %d: GPU Transfer Hang detected!\n", wid);
                     S(job->status, 0);
@@ -158,7 +137,7 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                     break;
                 }
 
-                pfnReset(wsi->device, 1, &fence);
+                pfnReset(dev_ctx->device, 1, &fence);
                 vkResetCommandBuffer(cmd, 0);
 
                 VkCommandBufferBeginInfo beginInfo = {
@@ -191,8 +170,8 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
                     .pSignalSemaphores    = &safe_timeline_semaphore
                 };
 
-                pfnSubmit(wsi->transfer_queue, 1, &submitInfo, fence);
-                pfnWait(wsi->device, 1, &fence, VK_TRUE, 2000000000);
+                pfnSubmit(dev_ctx->transfer_queue, 1, &submitInfo, fence);
+                pfnWait(dev_ctx->device, 1, &fence, VK_TRUE, 2000000000);
 
                 S(job->status, 0);
                 S(g_transfer_busy[wid], 0); // 3. Clean exit unlock
@@ -213,25 +192,19 @@ static THREAD_FUNC transfer_thread_loop(void* arg) {
 
 EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
                                DrawCommand* queue, uint32_t count,
-                               RenderThreadInit* win_wsi) {
-    if (p->width == 0 || p->height == 0) {
-        return;
-    }
+                               VulkanDeviceContext* dev_ctx,
+                               uint64_t target_image, uint64_t target_view) {
+    if (p->width == 0 || p->height == 0) return;
 
-    VkCommandBufferBeginInfo beginInfo = {
-        .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO
-    };
+    VkCommandBufferBeginInfo beginInfo = { .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO };
     vkBeginCommandBuffer(cmd, &beginInfo);
 
-    /* ── Pre-pass barriers */
     VkImageMemoryBarrier preBarriers[2] = {0};
-
     preBarriers[0].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
     preBarriers[0].oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
     preBarriers[0].newLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
-    preBarriers[0].image            = (VkImage)p->swapchain_image;
-    preBarriers[0].subresourceRange = (VkImageSubresourceRange){
-        VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+    preBarriers[0].image            = (VkImage)target_image; // LOCAL HANDLE
+    preBarriers[0].subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1 };
     preBarriers[0].dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
     preBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -242,21 +215,16 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
         VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
     preBarriers[1].dstAccessMask    = VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
 
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT |
-        VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT,
         0, 0, NULL, 0, NULL, 2, preBarriers);
 
-    /* ── Dynamic Rendering Begin */
-    PFN_vkCmdBeginRenderingKHR pfnBegin =
-        (PFN_vkCmdBeginRenderingKHR)win_wsi->pfnBegin;
-    PFN_vkCmdEndRenderingKHR pfnEnd =
-        (PFN_vkCmdEndRenderingKHR)win_wsi->pfnEnd;
+    PFN_vkCmdBeginRenderingKHR pfnBegin = (PFN_vkCmdBeginRenderingKHR)dev_ctx->pfnBegin;
+    PFN_vkCmdEndRenderingKHR   pfnEnd   = (PFN_vkCmdEndRenderingKHR)dev_ctx->pfnEnd;
 
     VkRenderingAttachmentInfoKHR colorAttachment = {0};
     colorAttachment.sType       = VK_STRUCTURE_TYPE_RENDERING_ATTACHMENT_INFO_KHR;
-    colorAttachment.imageView   = (VkImageView)p->swapchain_view;
+    colorAttachment.imageView   = (VkImageView)target_view; // LOCAL HANDLE
     colorAttachment.imageLayout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
     colorAttachment.loadOp      = VK_ATTACHMENT_LOAD_OP_CLEAR;
     colorAttachment.storeOp     = VK_ATTACHMENT_STORE_OP_STORE;
@@ -372,15 +340,12 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
         .sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
         .oldLayout        = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
         .newLayout        = VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
-        .image            = (VkImage)p->swapchain_image,
-        .subresourceRange = (VkImageSubresourceRange){
-            VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
+        .image            = (VkImage)target_image, // LOCAL HANDLE
+        .subresourceRange = (VkImageSubresourceRange){ VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1},
         .srcAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT,
         .dstAccessMask    = 0
     };
-    vkCmdPipelineBarrier(cmd,
-        VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-        VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
+    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT,
         0, 0, NULL, 0, NULL, 1, &presentBarrier);
 
     vkEndCommandBuffer(cmd);
@@ -462,12 +427,23 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             S(g_ring.local_read[wid], new_local_read);
             int read_idx = new_local_read;
 
-            RenderPacket*     p       = &g_ring.packets[read_idx];
+            // ... [Keep ring offset read logic exactly the same until we get to p] ...
+            RenderPacket* p = &g_ring.packets[read_idx];
             S(g_render_busy[wid], 1);
 
-            RenderThreadInit* win_wsi = &g_window_wsi[wid];
-            uint32_t frame_slots = win_wsi->max_frames_in_flight > 0
-                                   ? win_wsi->max_frames_in_flight : 3;
+            // --- LOCK-FREE WSI CONTEXT FETCH ---
+            uint32_t gen = L(g_wsi_generation[wid]);
+            uint32_t active_idx = gen & 1; 
+
+            VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
+            VulkanSwapchainContext* win_wsi = &g_wsi_ctx[wid][active_idx];
+
+            if (win_wsi->swapchain == VK_NULL_HANDLE || L(g_wsi_state[wid]) == 0 ||
+                p->width == 0 || p->height == 0) {
+                goto frame_done;
+            }
+
+            uint32_t frame_slots = dev_ctx->max_frames_in_flight > 0 ? dev_ctx->max_frames_in_flight : 3;
             if (frame_slots > 3) frame_slots = 3;
 
             uint32_t current_frame  = t_frame[wid] % frame_slots;
@@ -478,56 +454,47 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             }
             g_ring.active_ring_slots[wid][current_frame] = read_idx;
 
-            if (L(g_wsi_state[wid]) == 0 ||
-                p->width == 0 || p->height == 0) {
-                goto frame_done;
-            }
-
             VkCommandBuffer cmd_buf = g_render_cmd_buffers[wid][current_frame];
 
-            PFN_vkWaitForFences pfnWait =
-                (PFN_vkWaitForFences)win_wsi->vkWaitForFences;
-            VkResult wait_res = pfnWait(win_wsi->device, 1,
+            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)dev_ctx->vkWaitForFences;
+            VkResult wait_res = pfnWait(dev_ctx->device, 1,
                 &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
 
             if (wait_res == VK_TIMEOUT) {
-                printf("[C-WARN] Tenant %d: GPU Fence Timeout "
-                       "(CPU Starvation). Dropping frame to maintain "
-                       "lock parity.\n", wid);
+                printf("[C-WARN] Tenant %d: GPU Fence Timeout (CPU Starvation).\n", wid);
                 goto frame_done;
             }
 
-            PFN_vkAcquireNextImageKHR pfnAcquire =
-                (PFN_vkAcquireNextImageKHR)win_wsi->vkAcquireNextImageKHR;
+            PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)dev_ctx->vkAcquireNextImageKHR;
             uint32_t img_idx;
-            VkResult res = pfnAcquire(win_wsi->device, win_wsi->swapchain,
-                5000000, win_wsi->image_available[current_frame],
-                VK_NULL_HANDLE, &img_idx);
+            VkResult res = pfnAcquire(dev_ctx->device, win_wsi->swapchain,
+                5000000, win_wsi->image_available[current_frame], VK_NULL_HANDLE, &img_idx);
 
-            if (res == VK_TIMEOUT || res == VK_NOT_READY) {
-                goto frame_done;
-            }
+            if (res == VK_TIMEOUT || res == VK_NOT_READY) goto frame_done;
             if (res == VK_ERROR_OUT_OF_DATE_KHR) {
                 S(g_engine.mailbox.tenants[wid].window_resized, 1);
                 SLEEP_MS(10);
                 goto frame_done;
             }
 
-            PFN_vkResetFences pfnReset =
-                (PFN_vkResetFences)win_wsi->vkResetFences;
-            pfnReset(win_wsi->device, 1,
-                     &win_wsi->in_flight[current_frame]);
+            // --- OUT-OF-ORDER IMAGE FENCE FIX ---
+            if (win_wsi->images_in_flight_fences[img_idx] != VK_NULL_HANDLE) {
+                pfnWait(dev_ctx->device, 1, &win_wsi->images_in_flight_fences[img_idx], VK_TRUE, 2000000000);
+            }
+            win_wsi->images_in_flight_fences[img_idx] = win_wsi->in_flight[current_frame];
 
-            p->swapchain_image = win_wsi->swapchain_images[img_idx];
-            p->swapchain_view  = win_wsi->swapchain_views[img_idx];
+            PFN_vkResetFences pfnReset = (PFN_vkResetFences)dev_ctx->vkResetFences;
+            pfnReset(dev_ctx->device, 1, &win_wsi->in_flight[current_frame]);
+
+            uint64_t local_image = win_wsi->swapchain_images[img_idx];
+            uint64_t local_view  = win_wsi->swapchain_views[img_idx];
 
             vkResetCommandBuffer(cmd_buf, 0);
 
-            vx_record_commands(cmd_buf, p, p->draw_queue,
-                               p->draw_count, win_wsi);
+            vx_record_commands(cmd_buf, p, p->draw_queue, p->draw_count, dev_ctx, local_image, local_view);
 
-            VkPipelineStageFlags waitStage =
-                VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
+            VkSemaphore render_finished_sem = win_wsi->render_finished[current_frame]; // FIXED
 
             VkSubmitInfo submitInfo = {
                 .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -537,26 +504,23 @@ static THREAD_FUNC render_thread_loop(void* arg) {
                 .commandBufferCount   = 1,
                 .pCommandBuffers      = &cmd_buf,
                 .signalSemaphoreCount = 1,
-                .pSignalSemaphores    = &win_wsi->render_finished[img_idx]
+                .pSignalSemaphores    = &render_finished_sem
             };
 
-            PFN_vkQueueSubmit pfnSubmit =
-                (PFN_vkQueueSubmit)win_wsi->vkQueueSubmit;
-            pfnSubmit(win_wsi->queue, 1, &submitInfo,
-                      win_wsi->in_flight[current_frame]);
+            PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)dev_ctx->vkQueueSubmit;
+            pfnSubmit(dev_ctx->queue, 1, &submitInfo, win_wsi->in_flight[current_frame]);
 
             VkPresentInfoKHR presentInfo = {
                 .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,
                 .waitSemaphoreCount = 1,
-                .pWaitSemaphores    = &win_wsi->render_finished[img_idx],
+                .pWaitSemaphores    = &render_finished_sem,
                 .swapchainCount     = 1,
                 .pSwapchains        = &win_wsi->swapchain,
                 .pImageIndices      = &img_idx
             };
 
-            PFN_vkQueuePresentKHR pfnPresent =
-                (PFN_vkQueuePresentKHR)win_wsi->vkQueuePresentKHR;
-            pfnPresent(win_wsi->queue, &presentInfo);
+            PFN_vkQueuePresentKHR pfnPresent = (PFN_vkQueuePresentKHR)dev_ctx->vkQueuePresentKHR;
+            pfnPresent(dev_ctx->queue, &presentInfo);
 
         frame_done:
             S(g_render_busy[wid], 0);

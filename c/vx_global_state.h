@@ -165,7 +165,12 @@ extern "C" {
 
 extern EngineState       g_engine;
 extern RenderRing        g_ring;
-extern RenderThreadInit  g_window_wsi[MAX_WINDOWS];
+
+// NEW: Double-Buffered Decoupled Contexts
+extern VulkanDeviceContext    g_device_ctx[MAX_WINDOWS];
+extern VulkanSwapchainContext g_wsi_ctx[MAX_WINDOWS][2];
+extern _Atomic uint32_t       g_wsi_generation[MAX_WINDOWS];
+
 extern atomic_int        g_wsi_state[MAX_WINDOWS];
 extern atomic_int g_render_busy[MAX_WINDOWS];
 extern atomic_int g_transfer_busy[MAX_WINDOWS]; // ADD THIS
@@ -197,7 +202,8 @@ EXPORT void     vx_sys_dump_ring_state(int win_id);
 EXPORT RenderPacket* vx_stream_packet(int idx);
 EXPORT int           vx_stream_acquire(int win_id);
 EXPORT void          vx_stream_commit(int win_id, int idx);
-EXPORT void          vx_stream_init(int win_id, RenderThreadInit* wsi);
+// UPDATED SIGNATURE:
+EXPORT void          vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx);
 
 #ifdef __cplusplus
 }

@@ -7,11 +7,13 @@
 /* ── Global Variable Definitions */
 
 EngineState g_engine;
-
-/* Rely on BSS for structural zeroing; atomics strictly initialized in vx_init_mailbox */
 RenderRing g_ring;
 
-RenderThreadInit g_window_wsi[MAX_WINDOWS];
+// NEW: Double-Buffered Globals
+VulkanDeviceContext    g_device_ctx[MAX_WINDOWS];
+VulkanSwapchainContext g_wsi_ctx[MAX_WINDOWS][2];
+_Atomic uint32_t       g_wsi_generation[MAX_WINDOWS];
+
 atomic_int       g_wsi_state[MAX_WINDOWS];
 atomic_int       g_render_busy[MAX_WINDOWS];
 atomic_int       g_transfer_busy[MAX_WINDOWS]; // ADD THIS
@@ -167,16 +169,15 @@ EXPORT void vx_stream_commit(int win_id, int idx) {
     S(g_ring.ready_idx[win_id], idx);
 }
 
-EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
+EXPORT void vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
 
     S(g_wsi_state[win_id], 0);
     int timeout = 2000;
     int spin_count = 0;
 
-    // Update this loop to wait on BOTH threads
     while (L(g_render_busy[win_id]) || L(g_transfer_busy[win_id])) {
-        if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
+        if (spin_count >= 2000) { timeout--; }
         if (timeout <= 0) {
             printf("[C-FATAL] Threads failed to release busy flags "
                    "for Tenant %d. Aborting init to prevent corruption.\n", win_id);
@@ -185,7 +186,13 @@ EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
         vx_spin_wait(&spin_count);
     }
 
-    g_window_wsi[win_id] = *wsi;
+    // 1. Copy Immutable Context
+    g_device_ctx[win_id] = *dev_ctx;
+
+    // 2. Initialize WSI double-buffer state
+    S(g_wsi_generation[win_id], 0);
+    memset(&g_wsi_ctx[win_id][0], 0, sizeof(VulkanSwapchainContext));
+    memset(&g_wsi_ctx[win_id][1], 0, sizeof(VulkanSwapchainContext));
 
     int      offset      = win_id * 4;
     uint32_t tenant_mask = 0xFu << offset;
