@@ -207,3 +207,19 @@ EXPORT void vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx) {
 
     S(g_wsi_state[win_id], 1);
 }
+
+EXPORT uint32_t vx_sys_get_wsi_generation(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
+    // Return the active generation using acquire semantics
+    return L(g_wsi_generation[win_id]);
+}
+
+EXPORT VulkanSwapchainContext* vx_sys_get_inactive_wsi_slot(int win_id) {
+    if (win_id < 0 || win_id >= MAX_WINDOWS) return NULL;
+
+    uint32_t active_gen = L(g_wsi_generation[win_id]);
+    uint32_t inactive_idx = (active_gen + 1) % 2;
+
+    // Return a direct pointer to the dormant slot so Lua's FFI can populate it
+    return &g_wsi_ctx[win_id][inactive_idx];
+}

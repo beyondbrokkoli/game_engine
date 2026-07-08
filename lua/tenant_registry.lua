@@ -1,4 +1,4 @@
--- lua/tenant_registry.lua (Updated for WSI mapping)
+-- lua/tenant_registry.lua
 local ffi = require("ffi")
 local WindowAPI = require("window_api")
 local EngineAPI = require("engine_api")
@@ -27,48 +27,59 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     -- [GOLDEN FIX]: Sync primitive count MUST match the hardware image count!
     local sync = renderer.InitSync(vk_rt.vk, vk_rt.device, sc.imageCount)
 
-    local wsi = ffi.new("RenderThreadInit")
-    wsi.device = vk_rt.device
-    wsi.queue = vk_rt.queue
-    wsi.transfer_queue = vk_rt.transferQueue
-    wsi.swapchain = sc.handle
+    -- 3. Populate the IMMUTABLE Device Context
+    local dev_ctx = ffi.new("VulkanDeviceContext")
+    dev_ctx.device = vk_rt.device
+    dev_ctx.queue = vk_rt.queue
+    dev_ctx.transfer_queue = vk_rt.transferQueue
+    dev_ctx.max_frames_in_flight = sc.imageCount
 
-    -- Tell the C-Core to modulo the CPU frames exactly to the hardware capability
-    wsi.max_frames_in_flight = sc.imageCount
-
-    for i = 0, sc.imageCount - 1 do
-        wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
-        wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
-    end
-
-    -- [ARMOR PATCH]: Map ALL hardware indices across the FFI boundary
-    -- so the C-Core never reads a NULL pointer when using img_idx!
-    for i = 0, sc.imageCount - 1 do
-        wsi.image_available[i] = sync.imageAvailable[i];
-        wsi.render_finished[i] = sync.renderFinished[i];
-        wsi.in_flight[i]       = sync.inFlight[i];
-    end
-
-    -- FIX INJECTED: Populate required Dynamic Rendering and Sync function pointers
     local vk, dev = vk_rt.vk, vk_rt.device
-    wsi.vkWaitForFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
-    wsi.vkAcquireNextImageKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
-    wsi.vkResetFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
-    wsi.vkQueueSubmit = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
-    wsi.vkQueuePresentKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
-    wsi.pfnBegin = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
-    wsi.pfnEnd = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
-    wsi.pfnSetCullMode = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
-    wsi.pfnSetFrontFace = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
-    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
-    wsi.pfnSetDepthTestEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
-    wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
-    wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
+    dev_ctx.vkWaitForFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
+    dev_ctx.vkAcquireNextImageKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
+    dev_ctx.vkResetFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
+    dev_ctx.vkQueueSubmit = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
+    dev_ctx.vkQueuePresentKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
+    dev_ctx.pfnBegin = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
+    dev_ctx.pfnEnd = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
+    dev_ctx.pfnSetCullMode = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT"))
+    dev_ctx.pfnSetFrontFace = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT"))
+    dev_ctx.pfnSetPrimitiveTopology = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT"))
+    dev_ctx.pfnSetDepthTestEnable = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT"))
+    dev_ctx.pfnSetDepthWriteEnable = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT"))
+    dev_ctx.pfnSetDepthCompareOp = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT"))
 
-    EngineAPI.allocate_tenant(win_id, wsi, vk_rt.qIndex, vk_rt.tIndex);
-    EngineAPI.init_stream(win_id, wsi);
+    -- Tell C-Core to allocate the tenant boundaries and cache the device context
+    EngineAPI.allocate_tenant(win_id, dev_ctx, vk_rt.qIndex, vk_rt.tIndex)
 
-    -- 4. Construct the Isolated Lua Tenant Struct
+    -- 4. Populate the VOLATILE Swapchain Context (Zombie Protocol Boot Sequence)
+    WindowAPI.prepare_new_wsi(win_id, width, height)
+
+    local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
+    local dormant_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
+
+    local current_gen = ffi.C.vx_sys_get_wsi_generation(win_id)
+    local next_gen = current_gen + 1
+
+    dormant_wsi.swapchain = sc.handle
+    dormant_wsi.status = 1 -- 1 = ACTIVE
+
+    for i = 0, sc.imageCount - 1 do
+        dormant_wsi.swapchain_images[i] = ffi.cast("uint64_t", sc.images[i])
+        dormant_wsi.swapchain_views[i]  = ffi.cast("uint64_t", sc.imageViews[i])
+        dormant_wsi.image_available[i]  = sync.imageAvailable[i]
+        dormant_wsi.render_finished[i]  = sync.renderFinished[i]
+        dormant_wsi.in_flight[i]        = sync.inFlight[i]
+    end
+
+    -- Pivot the WSI Generation Slot!
+    WindowAPI.flip_wsi(win_id)
+    print(string.format("[UI BOOTSTRAP] Tenant %d WSI populated. Boot Generation: %d", win_id, next_gen))
+
+    -- 5. Open the render command stream for this tenant
+    EngineAPI.init_stream(win_id, dev_ctx)
+
+    -- 6. Construct the Isolated Lua Tenant Struct
     local tenant = {
         win_id = win_id,
         suspended = false,
@@ -78,7 +89,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
         sync = sync,
         cam = camera_mod.new(),
         pc = ffi.new("PushConstants"),
-        inv_vp = ffi.new("mat4_t")
+        inv_vp = ffi.new("mat4_t"),
+        generation = next_gen, 
+        zombies = {} -- Initialize the Lua-side Trash Collector
     }
 
     tenant.pc.aos_current_idx, tenant.pc.aos_prev_idx, tenant.pc.dt = 0, 0, 0.0

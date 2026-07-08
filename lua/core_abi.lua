@@ -35,14 +35,16 @@ void* vx_stream_packet(int idx);
 void vx_stream_commit(int win_id, int idx);
 
 void vx_thread_kill();
-void vx_stream_init(int win_id, void* wsi);
 void vx_thread_start();
 void vx_transfer_setup(uint32_t q_family_index);
 int vx_transfer_request(int win_id, uint64_t src, uint64_t dst, uint64_t size, uint64_t t_sem, uint64_t sig_val);
 
 // --- NEW VULKAN MULTI-TENANT & VALIDATION API ---
-void vx_stream_allocate_tenant(int wid, void* wsi, uint32_t gfx_family, uint32_t transfer_family);
-// -- void vx_record_commands(void* cmd, void* p, void* queue, uint32_t count, void* win_wsi);
+uint32_t vx_sys_get_wsi_generation(int win_id);
+void* vx_sys_get_inactive_wsi_slot(int win_id);
+void vx_stream_allocate_tenant(int wid, void* dev_ctx, uint32_t gfx_family, uint32_t transfer_family);
+void vx_stream_init(int win_id, void* dev_ctx);
+
 const char** vx_sys_glfw_extensions(uint32_t* count);
 void vx_sys_inject_validation(void* instance_ptr);
 void vx_sys_eject_validation(void* instance);

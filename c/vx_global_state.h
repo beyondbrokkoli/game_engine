@@ -209,6 +209,9 @@ EXPORT void          vx_stream_commit(int win_id, int idx);
 EXPORT void          vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx);
 EXPORT void vx_pump_zombie_gc(void);
 
+EXPORT uint32_t vx_sys_get_wsi_generation(int win_id);
+EXPORT VulkanSwapchainContext* vx_sys_get_inactive_wsi_slot(int win_id);
+
 #ifdef __cplusplus
 }
 #endif

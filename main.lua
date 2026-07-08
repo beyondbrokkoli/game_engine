@@ -319,8 +319,8 @@ local function main()
                     tnt.suspended = true
                     tnt.kill_state = 1
                     tnt.kill_wait = 0
-                    -- Phase 1: Force Render Thread to idle GPU and abandon tenant
-                    WindowAPI.trigger_wsi_rebuild(w_id)
+                    -- [UPDATED] Use CMD 4 to halt the C-thread instead of the old CMD 3
+                    WindowAPI.prepare_new_wsi(w_id, 0, 0)
                 end
             end
         end
@@ -409,23 +409,34 @@ local function main()
                 goto continue_tenant
             end
 
-            -- [EXISTING RESIZE LOGIC]
-            if WindowAPI.get_resize_state(win_id) and not tenant.suspended then
-                WindowAPI.trigger_wsi_rebuild(win_id);
-                tenant.suspended = true;
-                goto continue_tenant;
+            -- [ZOMBIE PROTOCOL ASYNC RESIZE]
+            if WindowAPI.get_resize_state(win_id) then
+                if not tenant.suspended then
+                    -- The OS is actively resizing the window.
+                    -- We stop pushing new Lua frames to avoid stretching, but the C-Core
+                    -- keeps rendering the last valid frame continuously!
+                    tenant.suspended = true
+                end
+                goto continue_tenant
             end
 
             if tenant.suspended then
-                if WindowAPI.get_resize_state(win_id) then
-                    WindowAPI.trigger_wsi_rebuild(win_id)
-                    goto continue_tenant
-                end
-
+                -- The OS has finished resizing (resize_state is false, but we are suspended)
                 local new_w, new_h = WindowAPI.get_window_size(win_id)
 
                 if new_w > 0 and new_h > 0 then
-                    print(string.format("[LUA CO] Tenant %d: GPU Idled. Executing WSI Rebuild...", win_id))
+                    print(string.format("[LUA CO] Tenant %d: OS Resize completed. Executing Zombie Protocol...", win_id))
+
+                    -- 1. Signal C to prepare the inactive slot (zero memory and wait)
+                    WindowAPI.prepare_new_wsi(win_id, new_w, new_h)
+
+                    -- 2. Fetch C-Pointers and Generation
+                    local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
+                    local inactive_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
+
+                    local current_gen = ffi.C.vx_sys_get_wsi_generation(win_id)
+                    local next_gen = current_gen + 1
+
                     tenant.width, tenant.height = new_w, new_h
                     tenant.suspended = false
 
@@ -433,60 +444,66 @@ local function main()
                     local graphics_mod = require("graphics_pipeline")
                     local renderer_mod = require("renderer")
 
-                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
-                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-
                     local old_sc_handle = tenant.sc.handle
 
-                    for i = 0, tenant.sc.imageCount - 1 do
-                        vk_rt.vk.vkDestroyImageView(vk_rt.device, tenant.sc.imageViews[i], nil)
-                    end
+                    -- [LUA-SIDE ZOMBIE GARBAGE QUEUE]
+                    -- We cannot destroy the old GFX pipeline or ImageViews yet! The C-Thread
+                    -- might still be executing the old generation. We queue them for deferred deletion.
+                    if not tenant.zombies then tenant.zombies = {} end
 
+                    local zombie_trash = {
+                        gfx = tenant.gfx,
+                        views = {},
+                        tick_added = sim_ctx.sim_tick_count
+                    }
+                    for i = 0, tenant.sc.imageCount - 1 do
+                        table.insert(zombie_trash.views, tenant.sc.imageViews[i])
+                    end
+                    table.insert(tenant.zombies, zombie_trash)
+
+                    -- 3. Build New Vulkan Objects (Pass old_sc_handle for seamless handoff)
                     tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
                     tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
-
                     tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
 
-                    vk_rt.vk.vkDestroySwapchainKHR(vk_rt.device, old_sc_handle, nil)
-
-                    local wsi = ffi.new("RenderThreadInit")
-                    wsi.device = vk_rt.device
-                    wsi.queue = vk_rt.queue
-                    wsi.transfer_queue = vk_rt.transferQueue
-                    wsi.swapchain = tenant.sc.handle
-                    wsi.max_frames_in_flight = tenant.sc.imageCount
+                    -- 4. Populate Dormant C Slot directly via FFI
+                    inactive_wsi.swapchain = tenant.sc.handle
+                    inactive_wsi.status = 1 -- ACTIVE
 
                     for i = 0, tenant.sc.imageCount - 1 do
-                        wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
-                        wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
+                        inactive_wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
+                        inactive_wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
+                        inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
+                        inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
+                        inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
                     end
 
-                    for i = 0, tenant.sc.imageCount - 1 do
-                        wsi.image_available[i] = tenant.sync.imageAvailable[i]
-                        wsi.render_finished[i] = tenant.sync.renderFinished[i]
-                        wsi.in_flight[i]       = tenant.sync.inFlight[i]
-                    end
+                    -- 5. Fire CMD_FLIP_WSI (Instantly pivots the C render thread on the next frame)
+                    WindowAPI.flip_wsi(win_id)
+                    tenant.generation = next_gen
 
-                    local vk, dev = vk_rt.vk, vk_rt.device
-                    wsi.vkWaitForFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkWaitForFences"))
-                    wsi.vkAcquireNextImageKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkAcquireNextImageKHR"))
-                    wsi.vkResetFences = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkResetFences"))
-                    wsi.vkQueueSubmit = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueueSubmit"))
-                    wsi.vkQueuePresentKHR = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkQueuePresentKHR"))
-                    wsi.pfnBegin = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdBeginRenderingKHR"))
-                    wsi.pfnEnd = ffi.cast("void*", vk.vkGetDeviceProcAddr(dev, "vkCmdEndRenderingKHR"))
-                    wsi.pfnSetCullMode = vk.vkGetDeviceProcAddr(dev, "vkCmdSetCullModeEXT")
-                    wsi.pfnSetFrontFace = vk.vkGetDeviceProcAddr(dev, "vkCmdSetFrontFaceEXT")
-                    wsi.pfnSetPrimitiveTopology = vk.vkGetDeviceProcAddr(dev, "vkCmdSetPrimitiveTopologyEXT")
-                    wsi.pfnSetDepthTestEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthTestEnableEXT")
-                    wsi.pfnSetDepthWriteEnable = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthWriteEnableEXT")
-                    wsi.pfnSetDepthCompareOp = vk.vkGetDeviceProcAddr(dev, "vkCmdSetDepthCompareOpEXT")
-
-                    EngineAPI.init_stream(win_id, wsi);
-                    print(string.format("[LUA CO] Tenant %d: WSI Stream Resumed.", win_id))
+                    print(string.format("[LUA CO] Tenant %d: Flipped to Generation %d. WSI Stream Resumed.", win_id, next_gen))
                 end
                 goto continue_tenant
             end
+
+            -- [PROCESS LUA-SIDE ZOMBIE GC]
+            -- Safely destroy old GFX pipelines and ImageViews after 60 ticks (~1 second of guaranteed safety)
+            if tenant.zombies and #tenant.zombies > 0 then
+                local survivor_zombies = {}
+                for _, z in ipairs(tenant.zombies) do
+                    if sim_ctx.sim_tick_count - z.tick_added > 60 then
+                        require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx)
+                        for _, view in ipairs(z.views) do
+                            vk_rt.vk.vkDestroyImageView(vk_rt.device, view, nil)
+                        end
+                    else
+                        table.insert(survivor_zombies, z)
+                    end
+                end
+                tenant.zombies = survivor_zombies
+            end
+            -- =====
 
             if win_id == active_win_id then
                 local mouse_x, mouse_y = WindowAPI.get_mouse_pos(win_id)
@@ -517,13 +534,12 @@ local function main()
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
 
     -- 1. THE MASTERSTROKE: Leverage our proven Phase-Gate isolation!
-    -- Send CMD_REBUILD_WSI to all remaining tenants to force the Render Thread
-    -- to idle the GPU, explicitly reset the command pools, and isolate itself.
     for win_id, tenant in pairs(TenantRegistry.active) do
-        WindowAPI.trigger_wsi_rebuild(win_id)
+        -- [UPDATED] Force the Render Thread to idle by preparing a dummy WSI slot
+        WindowAPI.prepare_new_wsi(win_id, 0, 0)
     end
 
-    -- 2. THE OMNISCIENCE POLL: Deterministic atomic polling replaces the magic wait.
+    -- 2. THE OMNISCIENCE POLL: Deterministic atomic polling
     print("[LUA IO] Waiting for C-Core Render Multiplexer to acknowledge teardown...")
     local all_idle = false
     while not all_idle do
@@ -534,25 +550,32 @@ local function main()
                 break
             end
         end
-
-        -- Yield briefly to the OS thread scheduler so C-Core can finalize its work
-        if not all_idle then
-            sys_sleep(1)
-        end
+        if not all_idle then sys_sleep(1) end
     end
     print("[LUA IO] Absolute C-Core Idle Confirmed.")
 
     -- Ensure the device is absolutely quiet. (Now completely safe to call)
     vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
 
-    -- 3. Now the Render Thread has cleanly abandoned the tenants and reset the pools.
-    -- We can safely destroy the Vulkan objects in Lua without Validation Layer panic!
+    -- 3. We can safely destroy the Vulkan objects in Lua!
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
 
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Remaining Tenant %d...", win_id))
+
+        -- [NEW] ZOMBIE PURGE: Clean up the 60-tick waiting room!
+        -- Since the device is idle, it is 100% safe to ignore the tick count and destroy immediately.
+        if tenant.zombies then
+            for _, z in ipairs(tenant.zombies) do
+                graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx)
+                for _, view in ipairs(z.views) do
+                    vk_rt.vk.vkDestroyImageView(vk_rt.device, view, nil)
+                end
+            end
+            tenant.zombies = {}
+        end
 
         graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
         renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
@@ -567,8 +590,7 @@ local function main()
         WindowAPI.destroy(win_id)
     end
 
-    -- 4. NOW kill the C-Core threads. Since the pools were already cleanly reset,
-    -- destroying them natively here will be completely silent.
+    -- 4. NOW kill the C-Core threads.
     EngineAPI.kill_thread()
 
     -- 5. Destroy the Global / Shared Engine State
