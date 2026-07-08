@@ -1,0 +1,29 @@
+In file included from c/vx_global_state.c:5:
+c/vx_global_state.h: In function 'vx_spin_wait':
+c/vx_global_state.h:54:13: error: implicit declaration of function 'SwitchToThread' [-Wimplicit-function-declaration]
+   54 |             SwitchToThread();
+      |             ^~~~~~~~~~~~~~
+In file included from c/vx_glfw_multiplexer.h:7,
+                 from c/vx_glfw_multiplexer.c:5:
+c/vx_global_state.h: In function 'vx_spin_wait':
+c/vx_global_state.h:54:13: error: implicit declaration of function 'SwitchToThread' [-Wimplicit-function-declaration]
+   54 |             SwitchToThread();
+      |             ^~~~~~~~~~~~~~
+In file included from c/vx_vulkan_core.h:8,
+                 from c/vx_vulkan_core.c:5:
+c/vx_global_state.h: In function 'vx_spin_wait':
+c/vx_global_state.h:54:13: error: implicit declaration of function 'SwitchToThread' [-Wimplicit-function-declaration]
+   54 |             SwitchToThread();
+      |             ^~~~~~~~~~~~~~
+In file included from c/vx_vulkan_render.h:2,
+                 from c/vx_vulkan_render.c:5:
+c/vx_global_state.h: In function 'vx_spin_wait':
+c/vx_global_state.h:54:13: error: implicit declaration of function 'SwitchToThread' [-Wimplicit-function-declaration]
+   54 |             SwitchToThread();
+      |             ^~~~~~~~~~~~~~
+In file included from c/main.c:6:
+c/vx_global_state.h: In function 'vx_spin_wait':
+c/vx_global_state.h:54:13: error: implicit declaration of function 'SwitchToThread' [-Wimplicit-function-declaration]
+   54 |             SwitchToThread();
+      |             ^~~~~~~~~~~~~~
+ [WARNING] Windows host compilation failed.
