@@ -96,6 +96,7 @@ typedef pthread_t vmath_thread_t;
 // Add to c/vx_global_state.h
 #define CMD_PREPARE_NEW_WSI 4
 #define CMD_FLIP_WSI 5
+#define CMD_TEARDOWN_WSI 6
 #define MAX_WINDOWS        4
 #define RING_SIZE          16
 #define TRANSFER_RING_SIZE 16

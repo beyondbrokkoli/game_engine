@@ -315,14 +315,28 @@ local function main()
         for w_id, tnt in pairs(TenantRegistry.active) do
             if WindowAPI.get_last_key(w_id) == cfg_gfx.key.esc then
                 if not tnt.kill_state then
-                    print(string.format("[LUA CO] Intercepted close request for Tenant %d. Initiating Teardown...", w_id))
+                    print(string.format("[LUA CO] Intercepted close request for Tenant %d. Initiating Zombie Teardown V2...", w_id))
                     tnt.suspended = true
                     tnt.kill_state = 1
                     tnt.kill_wait = 0
 
-                    -- [RESTORED]: We MUST use the CMD 3 Sledgehammer to halt the render thread!
-                    -- Assuming WindowAPI exposes the raw cmd setter, or use your legacy rebuild wrapper:
-                    ffi.C.vx_sys_set_cmd(w_id, 3, 0, 0)
+                    -- 1. STRICT GC ISOLATION: Dedicated Teardown Queue
+                    if not tnt.teardown_zombies then tnt.teardown_zombies = {} end
+                    table.insert(tnt.teardown_zombies, {
+                        gfx = tnt.gfx,
+                        sync = tnt.sync,
+                        surface = WindowAPI.get_surface(w_id),
+                        tick_added = sim_ctx.sim_tick_count,
+                        logic_purged = false
+                    })
+
+                    -- 2. Nullify primary pointers so main render loop skips them safely
+                    tnt.gfx = nil
+                    tnt.sync = nil
+                    if WindowAPI.set_surface then WindowAPI.set_surface(w_id, nil) end
+
+                    -- 3. Fire CMD_TEARDOWN_WSI (6) for the lock-free C-Core severance
+                    ffi.C.vx_sys_set_cmd(w_id, 6, 0, 0)
                 end
             end
         end
@@ -366,49 +380,6 @@ local function main()
         for win_id, tenant in pairs(TenantRegistry.active) do
             if WindowAPI.is_key_down(win_id, cfg_gfx.key.f5) then
                 ffi.C.vx_sys_dump_ring_state(win_id);
-            end
-
-            -- [PHASE-GATE DYNAMIC TEARDOWN]
-            if tenant.kill_state == 1 then
-                -- [OMNISCIENCE CHECK] No more frame counting. We poll the exact atomic state.
-                if WindowAPI.is_tenant_idle(win_id) == 1 then
-                    print(string.format("[LUA CO] Tenant %d: C-Core confirmed IDLE. Destroying Vulkan objects...", win_id))
-
-                    local swapchain_mod = require("swapchain")
-                    local graphics_mod = require("graphics_pipeline")
-                    local renderer_mod = require("renderer")
-
-                    graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
-                    renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-                    swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
-
-                    local surface_ptr = WindowAPI.get_surface(win_id)
-                    if surface_ptr ~= nil then
-                        local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
-                        vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
-                    end
-
-                    -- Phase 2: Issue CMD_KILL_WINDOW to Main Thread
-                    ffi.C.vx_sys_set_cmd(win_id, cfg_gfx.sys.kill, 0, 0)
-                    tenant.kill_state = 2
-                end
-                goto continue_tenant
-
-            elseif tenant.kill_state == 2 then
-                -- Poll until the OS window pointer is actually nullified by C
-                if WindowAPI.get_surface(win_id) == nil and WindowAPI.is_tenant_idle(win_id) == 1 then
-                    print(string.format("[LUA CO] Tenant %d: OS Window destroyed. Slot freed.", win_id))
-                    TenantRegistry.active[win_id] = nil
-
-                    -- [GLOBAL SHUTDOWN CHECK]
-                    local active_count = 0
-                    for _ in pairs(TenantRegistry.active) do active_count = active_count + 1 end
-                    if active_count == 0 then
-                        print("[LUA CO] All tenants dismantled. Commencing global shutdown...")
-                        EngineAPI.shutdown()
-                    end
-                end
-                goto continue_tenant
             end
 
             -- [ZOMBIE PROTOCOL: ASYNC RESIZE STATE MACHINE]
@@ -520,7 +491,61 @@ local function main()
                 end
                 tenant.zombies = survivor_zombies
             end
-            -- ===
+
+            -- [V2 GHOST TOWN TEARDOWN GC LOOP]
+            if tenant.teardown_zombies and #tenant.teardown_zombies > 0 then
+                local survivor_teardowns = {}
+                for _, z in ipairs(tenant.teardown_zombies) do
+                    local age = sim_ctx.sim_tick_count - z.tick_added
+
+                    -- Phase 1 (60 Ticks): Safely destroy logical CPU pipelines and fences
+                    if age > 60 and not z.logic_purged then
+                        if z.gfx then require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx) end
+                        if z.sync then
+                            for i = 0, z.sync.safe_frames - 1 do
+                                vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
+                            end
+                        end
+                        z.logic_purged = true
+                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 1 (Logical Purge) complete.", win_id))
+                    end
+
+                    -- Phase 2 (150 Ticks): Physical Surface & OS Window destruction
+                    if age > 150 then
+                        if z.surface then
+                            local vk_surface = ffi.cast("VkSurfaceKHR", z.surface)
+                            vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+                        end
+
+                        -- Execute final GLFW destruction via your API wrapper
+                        if WindowAPI.destroy then WindowAPI.destroy(win_id) end
+                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 2 (OS Window & Surface) purged.", win_id))
+
+                        -- The Ghost Town Wipe
+                        TenantRegistry.active[win_id] = nil
+
+                        -- [GLOBAL SHUTDOWN CHECK]
+                        local active_count = 0
+                        for _ in pairs(TenantRegistry.active) do active_count = active_count + 1 end
+                        if active_count == 0 then
+                            print("[LUA CO] All tenants dismantled. Commencing global shutdown...")
+                            EngineAPI.shutdown()
+                        end
+                    else
+                        table.insert(survivor_teardowns, z)
+                    end
+                end
+
+                -- Only assign survivors if the tenant wasn't just wiped
+                if TenantRegistry.active[win_id] then
+                    tenant.teardown_zombies = survivor_teardowns
+                end
+            end
+
+            -- Bypass frame packing entirely for dead/dying tenants
+            if tenant.kill_state or tenant.suspended then
+                goto continue_tenant
+            end
 
             if win_id == active_win_id then
                 local mouse_x, mouse_y = WindowAPI.get_mouse_pos(win_id)
