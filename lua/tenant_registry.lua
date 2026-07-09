@@ -105,9 +105,11 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
         cam = camera_mod.new(),
         pc = ffi.new("PushConstants"),
         inv_vp = ffi.new("mat4_t"),
+
+        -- 🚨 CRITICAL: Must align with the C-Core's initial flip!
         generation = next_gen,
-        zombies = {},    -- Initialize the Lua-side Trash Collector
-        wsi_state = 0    -- [NEW]: Boot directly into IDLE state for main.lua!
+        wsi_state = 0,
+        zombies = {}
     }
 
     tenant.pc.aos_current_idx, tenant.pc.aos_prev_idx, tenant.pc.dt = 0, 0, 0.0
