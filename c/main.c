@@ -105,9 +105,21 @@ int main(int argc, char** argv) {
             }
             else if (cmd == CMD_PREPARE_NEW_WSI) {
                 uint32_t active_gen = L(g_wsi_generation[id]);
+                uint32_t active_idx = active_gen % 2;
                 uint32_t inactive_idx = (active_gen + 1) % 2;
 
                 VulkanSwapchainContext* new_wsi = &g_wsi_ctx[id][inactive_idx];
+                VulkanSwapchainContext* old_wsi = &g_wsi_ctx[id][active_idx]; // We need the old one
+
+                uint32_t slot_status = atomic_load_explicit((_Atomic uint32_t*)&new_wsi->status, memory_order_acquire);
+                if (slot_status != 0) {
+                    continue;
+                }
+
+                // --- THE FIX: Mark the active WSI as 'Retiring' BEFORE Lua calls vkCreateSwapchainKHR ---
+                // '999' acts as a barrier so the Render Thread stops calling vkAcquireNextImageKHR.
+                // It will be safely overwritten to 120 (Zombie) when Lua fires CMD_FLIP_WSI.
+                atomic_store_explicit((_Atomic uint32_t*)&old_wsi->status, 999, memory_order_release);
 
                 // Purge memory so Lua inherits a pristine environment
                 memset(new_wsi, 0, sizeof(VulkanSwapchainContext));
