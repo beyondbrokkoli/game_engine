@@ -369,11 +369,7 @@ EXPORT void vx_pump_zombie_gc(void) {
         VulkanSwapchainContext* zombie = &g_wsi_ctx[wid][inactive_idx];
         uint32_t status = atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed);
 
-        if (status > 2) {
-            // Decrement the timer cleanly using fetch_sub
-            atomic_fetch_sub_explicit((_Atomic uint32_t*)&zombie->status, 1, memory_order_relaxed);
-        }
-        else if (status == 2) {
+        if (status == 2) {
             VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
 
             for (int i = 0; i < 10; i++) {
@@ -584,6 +580,15 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             pfnPresent(dev_ctx->queue, &presentInfo);
 
         frame_done:
+            // NEW: Tick down the zombie swapchain if one exists
+            uint32_t current_active_gen = L(g_wsi_generation[wid]);
+            uint32_t inactive_idx = (current_active_gen + 1) % 2;
+            VulkanSwapchainContext* zombie = &g_wsi_ctx[wid][inactive_idx];
+
+            uint32_t z_status = atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed);
+            if (z_status > 2) {
+                atomic_fetch_sub_explicit((_Atomic uint32_t*)&zombie->status, 1, memory_order_relaxed);
+            }
             S(g_render_busy[wid], 0);
             t_frame[wid] = (current_frame + 1) % frame_slots;
         }
