@@ -122,7 +122,10 @@ int main(int argc, char** argv) {
                 uint32_t inactive_idx = (active_gen + 1) % 2;
 
                 // Explicit casts to bypass Lua SSoT constraints on the uint32_t status field
-                atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][active_idx].status, 2, memory_order_release);
+
+                // Set zombie countdown to 120 frames (roughly 2 seconds of safety buffer)
+                atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][active_idx].status, 120, memory_order_release);
+
                 atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][inactive_idx].status, 1, memory_order_release);
 
                 // THE HOLY GRAIL FLIP

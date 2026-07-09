@@ -30,6 +30,7 @@ VkCommandPool    g_render_cmd_pools[MAX_WINDOWS];
 VkCommandPool    g_transfer_cmd_pools[MAX_WINDOWS];
 VkCommandBuffer  g_render_cmd_buffers[MAX_WINDOWS][3];
 VkCommandBuffer  g_transfer_cmd_buffers[MAX_WINDOWS];
+VkFence          g_render_fences[MAX_WINDOWS][3]; // NEW IMMORTAL FENCES
 VkFence          g_transfer_fences[MAX_WINDOWS];
 
 /* ── Threading Helpers */

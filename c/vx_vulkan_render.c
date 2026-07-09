@@ -47,6 +47,15 @@ EXPORT void vx_stream_allocate_tenant(int wid, VulkanDeviceContext* dev_ctx,
         };
         vkAllocateCommandBuffers(dev_ctx->device, &t_alloc_info, &g_transfer_cmd_buffers[wid]);
 
+        // --- NEW: Allocate Immortal Fences ---
+        VkFenceCreateInfo f_info = {
+            .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
+            .flags = VK_FENCE_CREATE_SIGNALED_BIT
+        };
+        for(int i = 0; i < 3; i++) {
+            vkCreateFence(dev_ctx->device, &f_info, NULL, &g_render_fences[wid][i]);
+        }
+
         VkFenceCreateInfo fence_info = {
             .sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO,
             .flags = 1
@@ -353,70 +362,45 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
 
 EXPORT void vx_pump_zombie_gc(void) {
     for (int wid = 0; wid < MAX_WINDOWS; wid++) {
-        // Use acquire semantics (L) to ensure we see the flip memory barriers
         uint32_t active_gen = L(g_wsi_generation[wid]);
         uint32_t inactive_idx = (active_gen + 1) % 2;
 
         VulkanSwapchainContext* zombie = &g_wsi_ctx[wid][inactive_idx];
+        uint32_t status = atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed);
 
-        // --- ATOMIC CAST FIX ---
-        // Explicitly cast to _Atomic to bypass Lua SSoT uint32_t restrictions
-        if (atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed) == 2) {
-
+        if (status > 2) {
+            // Decrement the timer. The GPU has roughly 2 seconds to finish rendering old frames.
+            atomic_store_explicit((_Atomic uint32_t*)&zombie->status, status - 1, memory_order_relaxed);
+        }
+        else if (status == 2) {
             VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
-            bool safe_to_destroy = true;
 
-            // 1. Poll all 10 out-of-order tracking fences.
-            // If ANY fence is still VK_NOT_READY, the GPU is still using the Zombie.
             for (int i = 0; i < 10; i++) {
-                if (zombie->images_in_flight_fences[i] != VK_NULL_HANDLE) {
-                    VkResult res = vkGetFenceStatus(dev_ctx->device, zombie->images_in_flight_fences[i]);
-                    if (res == VK_NOT_READY) {
-                        safe_to_destroy = false;
-                        break;
-                    }
+                if (zombie->swapchain_views[i] != 0) {
+                    vkDestroyImageView(dev_ctx->device, (VkImageView)zombie->swapchain_views[i], NULL);
+                    zombie->swapchain_views[i] = 0;
                 }
             }
 
-            if (safe_to_destroy) {
-                // 2. AUTOCOMPLETED DESTRUCTION LOGIC
-
-                // A. Destroy Swapchain Views (Max 10)
-                for (int i = 0; i < 10; i++) {
-                    if (zombie->swapchain_views[i] != 0) {
-                        vkDestroyImageView(dev_ctx->device, (VkImageView)zombie->swapchain_views[i], NULL);
-                        zombie->swapchain_views[i] = 0;
-                    }
+            for (int i = 0; i < 10; i++) {
+                if (zombie->image_available[i] != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(dev_ctx->device, zombie->image_available[i], NULL);
+                    zombie->image_available[i] = VK_NULL_HANDLE;
                 }
-
-                // B. Destroy Sync Primitives (Max 3, explicitly mapped to frames-in-flight)
-                for (int i = 0; i < 3; i++) {
-                    if (zombie->image_available[i] != VK_NULL_HANDLE) {
-                        vkDestroySemaphore(dev_ctx->device, zombie->image_available[i], NULL);
-                        zombie->image_available[i] = VK_NULL_HANDLE;
-                    }
-                    if (zombie->render_finished[i] != VK_NULL_HANDLE) {
-                        vkDestroySemaphore(dev_ctx->device, zombie->render_finished[i], NULL);
-                        zombie->render_finished[i] = VK_NULL_HANDLE;
-                    }
-                    if (zombie->in_flight[i] != VK_NULL_HANDLE) {
-                        vkDestroyFence(dev_ctx->device, zombie->in_flight[i], NULL);
-                        zombie->in_flight[i] = VK_NULL_HANDLE;
-                    }
+                if (zombie->render_finished[i] != VK_NULL_HANDLE) {
+                    vkDestroySemaphore(dev_ctx->device, zombie->render_finished[i], NULL);
+                    zombie->render_finished[i] = VK_NULL_HANDLE;
                 }
-
-                // C. Destroy the Swapchain KHR
-                if (zombie->swapchain != VK_NULL_HANDLE) {
-                    vkDestroySwapchainKHR(dev_ctx->device, zombie->swapchain, NULL);
-                    zombie->swapchain = VK_NULL_HANDLE;
-                }
-
-                // --- ATOMIC CAST FIX ---
-                // Mark as 0 (INACTIVE) so Lua can safely populate it on the next resize
-                atomic_store_explicit((_Atomic uint32_t*)&zombie->status, 0, memory_order_release);
-
-                printf("[C-CORE] Tenant %d: Zombie Swapchain (Gen %d) safely garbage collected.\n", wid, active_gen - 1);
+                // Notice: We DO NOT destroy fences here! Lua destroys them on its side, and the C immortal fences live forever.
             }
+
+            if (zombie->swapchain != VK_NULL_HANDLE) {
+                vkDestroySwapchainKHR(dev_ctx->device, zombie->swapchain, NULL);
+                zombie->swapchain = VK_NULL_HANDLE;
+            }
+
+            atomic_store_explicit((_Atomic uint32_t*)&zombie->status, 0, memory_order_release);
+            printf("[C-CORE] Tenant %d: Zombie Swapchain safely garbage collected via aging.\n", wid);
         }
     }
 }
@@ -499,13 +483,12 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             S(g_ring.local_read[wid], new_local_read);
             int read_idx = new_local_read;
 
-            // ... [Keep ring offset read logic exactly the same until we get to p] ...
             RenderPacket* p = &g_ring.packets[read_idx];
             S(g_render_busy[wid], 1);
 
-            // --- LOCK-FREE WSI CONTEXT FETCH ---
-            uint32_t gen = L(g_wsi_generation[wid]);
-            uint32_t active_idx = gen & 1; 
+            // 1. FIX: Read generation directly from the packet to guarantee perfect WSI alignment!
+            uint32_t gen = p->swapchain_generation;
+            uint32_t active_idx = gen & 1;
 
             VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
             VulkanSwapchainContext* win_wsi = &g_wsi_ctx[wid][active_idx];
@@ -528,15 +511,17 @@ static THREAD_FUNC render_thread_loop(void* arg) {
 
             VkCommandBuffer cmd_buf = g_render_cmd_buffers[wid][current_frame];
 
+            // 2. FIX: Wait on the IMMORTAL fence to strictly protect the command buffer!
+            VkFence immortal_fence = g_render_fences[wid][current_frame];
             PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)dev_ctx->vkWaitForFences;
-            VkResult wait_res = pfnWait(dev_ctx->device, 1,
-                &win_wsi->in_flight[current_frame], VK_TRUE, 2000000000);
+            VkResult wait_res = pfnWait(dev_ctx->device, 1, &immortal_fence, VK_TRUE, 2000000000);
 
             if (wait_res == VK_TIMEOUT) {
                 printf("[C-WARN] Tenant %d: GPU Fence Timeout (CPU Starvation).\n", wid);
                 goto frame_done;
             }
 
+            // Image Available Semaphore uses current_frame because img_idx is unknown until this returns
             PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)dev_ctx->vkAcquireNextImageKHR;
             uint32_t img_idx;
             VkResult res = pfnAcquire(dev_ctx->device, win_wsi->swapchain,
@@ -549,14 +534,15 @@ static THREAD_FUNC render_thread_loop(void* arg) {
                 goto frame_done;
             }
 
-            // --- OUT-OF-ORDER IMAGE FENCE FIX ---
+            // Out-Of-Order Image Protection (Uses Immortal Fence!)
             if (win_wsi->images_in_flight_fences[img_idx] != VK_NULL_HANDLE) {
                 pfnWait(dev_ctx->device, 1, &win_wsi->images_in_flight_fences[img_idx], VK_TRUE, 2000000000);
             }
-            win_wsi->images_in_flight_fences[img_idx] = win_wsi->in_flight[current_frame];
+            win_wsi->images_in_flight_fences[img_idx] = immortal_fence;
 
+            // 3. FIX: Reset the IMMORTAL fence!
             PFN_vkResetFences pfnReset = (PFN_vkResetFences)dev_ctx->vkResetFences;
-            pfnReset(dev_ctx->device, 1, &win_wsi->in_flight[current_frame]);
+            pfnReset(dev_ctx->device, 1, &immortal_fence);
 
             uint64_t local_image = win_wsi->swapchain_images[img_idx];
             uint64_t local_view  = win_wsi->swapchain_views[img_idx];
@@ -566,7 +552,9 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             vx_record_commands(cmd_buf, p, p->draw_queue, p->draw_count, dev_ctx, local_image, local_view);
 
             VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            VkSemaphore render_finished_sem = win_wsi->render_finished[current_frame]; // FIXED
+
+            // 4. FIX: GOLDEN SNIPPET RESTORED. Present-sync uses img_idx!
+            VkSemaphore render_finished_sem = win_wsi->render_finished[img_idx];
 
             VkSubmitInfo submitInfo = {
                 .sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
@@ -580,7 +568,7 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             };
 
             PFN_vkQueueSubmit pfnSubmit = (PFN_vkQueueSubmit)dev_ctx->vkQueueSubmit;
-            pfnSubmit(dev_ctx->queue, 1, &submitInfo, win_wsi->in_flight[current_frame]);
+            pfnSubmit(dev_ctx->queue, 1, &submitInfo, immortal_fence); // Signal Immortal Fence!
 
             VkPresentInfoKHR presentInfo = {
                 .sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR,

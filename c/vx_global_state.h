@@ -191,6 +191,7 @@ extern VkCommandPool     g_render_cmd_pools[MAX_WINDOWS];
 extern VkCommandPool     g_transfer_cmd_pools[MAX_WINDOWS];
 extern VkCommandBuffer   g_render_cmd_buffers[MAX_WINDOWS][3];
 extern VkCommandBuffer   g_transfer_cmd_buffers[MAX_WINDOWS];
+extern VkFence           g_render_fences[MAX_WINDOWS][3]; // NEW IMMORTAL FENCES
 extern VkFence           g_transfer_fences[MAX_WINDOWS];
 
 /* ── Global-State Function Prototypes */
