@@ -1,3 +1,9 @@
+[C-CORE] Tenant 2: Asynchronous WSI Flip Executed! (New Gen: 2)
+
+[VULKAN LAYER ENFORCER]
 SEVERITY: 4096
-MESSAGE: vkQueueSubmit(): pSubmits[0] command buffer VkCommandBuffer 0x1735d8181f8 expects VkImage 0x260000000026 (subresource: aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT, mipLevel = 0, arrayLayer = 0) to be in layout VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL--instead, current layout is VK_IMAGE_LAYOUT_UNDEFINED.
-The Vulkan spec states: If a descriptor with type equal to any of VK_DESCRIPTOR_TYPE_SAMPLE_WEIGHT_IMAGE_QCOM, VK_DESCRIPTOR_TYPE_BLOCK_MATCH_IMAGE_QCOM, VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, or VK_DESCRIPTOR_TYPE_INPUT_ATTACHMENT is accessed as a result of this command, all image subresources identified by that descriptor must be in the image layout identified when the descriptor was written 
+MESSAGE: vkCmdBeginRenderingKHR(): pRenderingInfo->pColorAttachments[0].imageView height (360) is less than pRenderingInfo->renderArea.offset.y (0) + pRenderingInfo->renderArea.extent.height (598).
+The Vulkan spec states: If the pNext chain does not contain VkDeviceGroupRenderPassBeginInfo or its deviceRenderAreaCount member is equal to 0, the height of the imageView member of each element of pColorAttachments, pDepthAttachment, or pStencilAttachment that is not VK_NULL_HANDLE must be greater than or equal to renderArea.offset.y + renderArea.extent.height (https://docs.vulkan.org/spec/latest/chapters/renderpass.html#VUID-VkRenderingInfo-pNext-06080)
+
+[LUA FSM] Tenant 2: Resize detected. Firing CMD 4...
+[C-CORE] Tenant 2: Slot 1 cleared. Yielding WSI build to Lua.
