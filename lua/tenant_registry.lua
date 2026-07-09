@@ -62,6 +62,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     -- Tell C-Core to allocate the tenant boundaries and cache the device context
     EngineAPI.allocate_tenant(win_id, dev_ctx, vk_rt.qIndex, vk_rt.tIndex)
 
+    -- 5. Open the render command stream for this tenant
+    EngineAPI.init_stream(win_id, dev_ctx)
+
     -- 4. Populate the VOLATILE Swapchain Context (Zombie Protocol Boot Sequence)
     WindowAPI.prepare_new_wsi(win_id, width, height)
 
@@ -90,9 +93,6 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     -- Pivot the WSI Generation Slot!
     WindowAPI.flip_wsi(win_id)
     print(string.format("[UI BOOTSTRAP] Tenant %d WSI populated. Boot Generation: %d", win_id, next_gen))
-
-    -- 5. Open the render command stream for this tenant
-    EngineAPI.init_stream(win_id, dev_ctx)
 
     -- 6. Construct the Isolated Lua Tenant Struct
     local tenant = {
