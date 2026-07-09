@@ -452,7 +452,7 @@ local function main()
                 -- [QUEUE LUA GARBAGE]
                 if not tenant.zombies then tenant.zombies = {} end
                 table.insert(tenant.zombies, {
-                    gfx = tenant.gfx, 
+                    gfx = tenant.gfx,
                     tick_added = sim_ctx.sim_tick_count
                 })
 
@@ -469,11 +469,9 @@ local function main()
                     inactive_wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
                     inactive_wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
 
-                    if i < 3 then
-                        inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
-                        inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
-                        inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
-                    end
+                    inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
+                    inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
+                    inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
                 end
 
                 tenant.width, tenant.height = new_w, new_h
