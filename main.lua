@@ -453,11 +453,20 @@ local function main()
                 if not tenant.zombies then tenant.zombies = {} end
                 table.insert(tenant.zombies, {
                     gfx = tenant.gfx,
+                    sync = tenant.sync, -- [FIX]: Queue the sync primitives!
                     tick_added = sim_ctx.sim_tick_count
                 })
 
                 -- [BUILD NEW VULKAN OBJECTS]
                 tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
+
+                -- [CRITICAL FIX]: Handle VK_ERROR_OUT_OF_DATE_KHR gracefully
+                if not tenant.sc then
+                    print(string.format("[LUA FSM] Tenant %d: Swapchain creation failed (Out of Date). Aborting rebuild.", win_id))
+                    tenant.wsi_state = 0
+                    goto continue_tenant
+                end
+
                 tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
                 tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
 
@@ -489,6 +498,13 @@ local function main()
                 for _, z in ipairs(tenant.zombies) do
                     if sim_ctx.sim_tick_count - z.tick_added > 60 then
                         require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx)
+
+                        -- [FIX]: C-Core destroys the semaphores, so we MUST ONLY destroy the fences!
+                        if z.sync then
+                            for i = 0, z.sync.safe_frames - 1 do
+                                vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
+                            end
+                        end
                     else
                         table.insert(survivor_zombies, z)
                     end
@@ -561,7 +577,11 @@ local function main()
         if tenant.zombies then
             for _, z in ipairs(tenant.zombies) do
                 graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx)
-                -- REMOVED: vkDestroyImageView (C-core owns this, destroying here causes a double-free)
+                if z.sync then
+                    for i = 0, z.sync.safe_frames - 1 do
+                        vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
+                    end
+                end
             end
             tenant.zombies = {}
         end

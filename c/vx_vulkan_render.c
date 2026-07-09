@@ -217,7 +217,8 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
     preBarriers[0].dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
     preBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    preBarriers[1].oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
+    // Update preBarriers[1] for the depth image:
+    preBarriers[1].oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     preBarriers[1].newLayout        = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     preBarriers[1].image            = (VkImage)p->depth_image;
     preBarriers[1].subresourceRange = (VkImageSubresourceRange){
@@ -369,8 +370,8 @@ EXPORT void vx_pump_zombie_gc(void) {
         uint32_t status = atomic_load_explicit((_Atomic uint32_t*)&zombie->status, memory_order_relaxed);
 
         if (status > 2) {
-            // Decrement the timer. The GPU has roughly 2 seconds to finish rendering old frames.
-            atomic_store_explicit((_Atomic uint32_t*)&zombie->status, status - 1, memory_order_relaxed);
+            // Decrement the timer cleanly using fetch_sub
+            atomic_fetch_sub_explicit((_Atomic uint32_t*)&zombie->status, 1, memory_order_relaxed);
         }
         else if (status == 2) {
             VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
@@ -625,7 +626,13 @@ EXPORT void vx_thread_kill(void) {
             vkDestroyCommandPool(g_device_ctx[i].device, g_render_cmd_pools[i], NULL);
             g_render_cmd_pools[i] = VK_NULL_HANDLE;
         }
-
+        // --- ADD IMMORTAL FENCE CLEANUP ---
+        for (int j = 0; j < 3; j++) {
+            if (g_render_fences[i][j] != VK_NULL_HANDLE) {
+                vkDestroyFence(g_device_ctx[i].device, g_render_fences[i][j], NULL);
+                g_render_fences[i][j] = VK_NULL_HANDLE;
+            }
+        }
         // --- NOTE 3 PATCH: Use g_device_ctx for transfer destruction ---
         if (g_transfer_cmd_pools[i]) {
             vkDestroyCommandPool(g_device_ctx[i].device,
