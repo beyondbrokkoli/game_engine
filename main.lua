@@ -426,73 +426,73 @@ local function main()
                         tenant.wsi_state = 2
                     end
 
-            elseif tenant.wsi_state == 2 then
-                -- STATE 2: BUILDING_WSI (Construct & Flip)
-                local new_w, new_h = tenant.target_w, tenant.target_h
+                elseif tenant.wsi_state == 2 then
+                    -- STATE 2: BUILDING_WSI (Construct & Flip)
+                    local new_w, new_h = tenant.target_w, tenant.target_h
 
-                local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
-                local inactive_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
+                    local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
+                    local inactive_wsi = ffi.cast("VulkanSwapchainContext*", inactive_wsi_ptr)
 
-                local current_gen = ffi.C.vx_sys_get_wsi_generation(win_id)
-                local next_gen = current_gen + 1
+                    local current_gen = ffi.C.vx_sys_get_wsi_generation(win_id)
+                    local next_gen = current_gen + 1
 
-                local swapchain_mod = require("swapchain")
-                local graphics_mod = require("graphics_pipeline")
-                local renderer_mod = require("renderer")
+                    local swapchain_mod = require("swapchain")
+                    local graphics_mod = require("graphics_pipeline")
+                    local renderer_mod = require("renderer")
 
-                local old_sc_handle = tenant.sc.handle
+                    local old_sc_handle = tenant.sc.handle
 
-                -- [QUEUE LUA GARBAGE]
-                if not tenant.zombies then tenant.zombies = {} end
-                table.insert(tenant.zombies, {
-                    gfx = tenant.gfx,
-                    sync = tenant.sync, -- [FIX]: Queue the sync primitives!
-                    tick_added = sim_ctx.sim_tick_count
-                })
+                    -- [QUEUE LUA GARBAGE]
+                    if not tenant.zombies then tenant.zombies = {} end
+                    table.insert(tenant.zombies, {
+                        gfx = tenant.gfx,
+                        sync = tenant.sync, -- [FIX]: Queue the sync primitives!
+                        tick_added = sim_ctx.sim_tick_count
+                    })
 
-                -- Build New Vulkan Objects
-                tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
+                    -- Build New Vulkan Objects
+                    tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
 
-                if not tenant.sc then
-                    print(string.format("[LUA FSM] Tenant %d: Swapchain creation failed. Aborting rebuild.", win_id))
-                    tenant.wsi_state = 0
-                    goto continue_tenant
-                end
-
-                -- 🚨 NEW FIX: Vulkan has the final say on dimensions. Read the clamped extent!
-                local final_w = tenant.sc.extent.width
-                local final_h = tenant.sc.extent.height
-
-                -- Use final_w and final_h for the rest of the pipeline
-                tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, final_w, final_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
-                tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
-
-                -- Populate Dormant C Slot directly via FFI
-                inactive_wsi.swapchain = tenant.sc.handle
-                inactive_wsi.status = 1 -- ACTIVE
-
-                for i = 0, tenant.sc.imageCount - 1 do
-                    inactive_wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
-                    inactive_wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
-
-                    if i < 3 then
-                        inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
-                        inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
-                        inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
+                    if not tenant.sc then
+                        print(string.format("[LUA FSM] Tenant %d: Swapchain creation failed. Aborting rebuild.", win_id))
+                        tenant.wsi_state = 0
+                        goto continue_tenant
                     end
+
+                    -- 🚨 NEW FIX: Vulkan has the final say on dimensions. Read the clamped extent!
+                    local final_w = tenant.sc.extent.width
+                    local final_h = tenant.sc.extent.height
+
+                    -- Use final_w and final_h for the rest of the pipeline
+                    tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, final_w, final_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
+                    tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
+
+                    -- Populate Dormant C Slot directly via FFI
+                    inactive_wsi.swapchain = tenant.sc.handle
+                    inactive_wsi.status = 1 -- ACTIVE
+
+                    for i = 0, tenant.sc.imageCount - 1 do
+                        inactive_wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
+                        inactive_wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
+
+                        if i < 3 then
+                            inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
+                            inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
+                            inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
+                        end
+                    end
+
+                    -- 🚨 NEW FIX: Sync the Lua tenant state to the true hardware dimensions
+                    tenant.width = final_w
+                    tenant.height = final_h
+                    tenant.generation = next_gen
+
+                    -- [THE FLIP]
+                    WindowAPI.flip_wsi(win_id)
+                    print(string.format("[LUA FSM] Tenant %d: Flipped to Generation %d.", win_id, next_gen))
+                    tenant.wsi_state = 0
                 end
-
-                -- 🚨 NEW FIX: Sync the Lua tenant state to the true hardware dimensions
-                tenant.width = final_w
-                tenant.height = final_h
-                tenant.generation = next_gen
-
-                -- [THE FLIP]
-                WindowAPI.flip_wsi(win_id)
-                print(string.format("[LUA FSM] Tenant %d: Flipped to Generation %d.", win_id, next_gen))
-                tenant.wsi_state = 0
             end
-
             -- [PROCESS LUA-SIDE ZOMBIE GC] (Now handles both Resize & Teardown)
             if tenant.zombies and #tenant.zombies > 0 then
                 local survivor_zombies = {}
