@@ -457,20 +457,24 @@ local function main()
                     tick_added = sim_ctx.sim_tick_count
                 })
 
-                -- [BUILD NEW VULKAN OBJECTS]
+                -- Build New Vulkan Objects
                 tenant.sc = swapchain_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, old_sc_handle, WindowAPI.get_surface(win_id))
 
-                -- [CRITICAL FIX]: Handle VK_ERROR_OUT_OF_DATE_KHR gracefully
                 if not tenant.sc then
-                    print(string.format("[LUA FSM] Tenant %d: Swapchain creation failed (Out of Date). Aborting rebuild.", win_id))
+                    print(string.format("[LUA FSM] Tenant %d: Swapchain creation failed. Aborting rebuild.", win_id))
                     tenant.wsi_state = 0
                     goto continue_tenant
                 end
 
-                tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, new_w, new_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
+                -- 🚨 NEW FIX: Vulkan has the final say on dimensions. Read the clamped extent!
+                local final_w = tenant.sc.extent.width
+                local final_h = tenant.sc.extent.height
+
+                -- Use final_w and final_h for the rest of the pipeline
+                tenant.gfx = graphics_mod.Init(vk_rt.vk, vk_rt, final_w, final_h, desc.pipelineLayout, tenant.sc.format, manifest.graphics)
                 tenant.sync = renderer_mod.InitSync(vk_rt.vk, vk_rt.device, tenant.sc.imageCount)
 
-                -- [POPULATE DORMANT C SLOT]
+                -- Populate Dormant C Slot directly via FFI
                 inactive_wsi.swapchain = tenant.sc.handle
                 inactive_wsi.status = 1 -- ACTIVE
 
@@ -478,12 +482,16 @@ local function main()
                     inactive_wsi.swapchain_images[i] = ffi.cast("uint64_t", tenant.sc.images[i])
                     inactive_wsi.swapchain_views[i]  = ffi.cast("uint64_t", tenant.sc.imageViews[i])
 
-                    inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
-                    inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
-                    inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
+                    if i < 3 then
+                        inactive_wsi.image_available[i]  = tenant.sync.imageAvailable[i]
+                        inactive_wsi.render_finished[i]  = tenant.sync.renderFinished[i]
+                        inactive_wsi.in_flight[i]        = tenant.sync.inFlight[i]
+                    end
                 end
 
-                tenant.width, tenant.height = new_w, new_h
+                -- 🚨 NEW FIX: Sync the Lua tenant state to the true hardware dimensions
+                tenant.width = final_w
+                tenant.height = final_h
                 tenant.generation = next_gen
 
                 -- [THE FLIP]
