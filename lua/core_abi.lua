@@ -4,6 +4,7 @@ ffi.cdef[[
 // C-Core Multi-Tenant Window & Input API
 void vx_sys_publish_instance(int win_id, void* instance);
 void vx_sys_set_cmd(int win_id, int cmd, int w, int h);
+int vx_sys_get_cmd(int win_id);
 void* vx_sys_get_surface(int win_id);
 int vx_sys_get_resize_state(int win_id);
 void vx_sys_window_size(int win_id, int* w, int* h);

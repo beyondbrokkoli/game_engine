@@ -27,6 +27,9 @@ end
 function WindowAPI.trigger_wsi_rebuild(win_id)
     ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0) -- 3 = CMD_REBUILD_WSI
 end
+function WindowAPI.get_cmd_state(win_id)
+    return ffi.C.vx_sys_get_cmd(win_id)
+end
 function WindowAPI.is_tenant_idle(win_id)
     return ffi.C.vx_sys_is_tenant_idle(win_id)
 end

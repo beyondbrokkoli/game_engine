@@ -7,6 +7,7 @@ local renderer = require("renderer")
 local camera_mod = require("camera")
 
 -- 1. DUPLICATE THE OS TIMERS HERE
+-- ADDING THIS DIDNT HELP THE ISSUE THAT WAS MY MISTAKE I LEFT IT HERE TO STAY HONEST
 local function sys_sleep(ms)
     if jit.os == "Windows" then
         ffi.C.Sleep(ms)
@@ -27,7 +28,7 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     local surface = nil
     while surface == nil do
         surface = WindowAPI.get_surface(win_id)
-        -- sys_sleep(10) is handled in main, but a small yield here is safe
+        sys_sleep(1) -- Use your cross-platform sleep
     end
 
     -- 2. Allocate WSI & Sync Primitives per Tenant
@@ -64,10 +65,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
     -- 4. Populate the VOLATILE Swapchain Context (Zombie Protocol Boot Sequence)
     WindowAPI.prepare_new_wsi(win_id, width, height)
 
-    -- [INJECTED PHASE-GATE]: Wait for C-Core to zero the slot and idle!
-    while WindowAPI.is_tenant_idle(win_id) == 0 do
-        -- A tiny yield to prevent locking the CPU
-        ffi.C.usleep(1000)
+    -- [THE LOCK-FREE HANDSHAKE]: Wait for C-Core to zero the slot and set CMD back to 0!
+    while WindowAPI.get_cmd_state(win_id) ~= 0 do
+        sys_sleep(1)
     end
 
     local inactive_wsi_ptr = ffi.C.vx_sys_get_inactive_wsi_slot(win_id)
@@ -105,8 +105,9 @@ function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
         cam = camera_mod.new(),
         pc = ffi.new("PushConstants"),
         inv_vp = ffi.new("mat4_t"),
-        generation = next_gen, 
-        zombies = {} -- Initialize the Lua-side Trash Collector
+        generation = next_gen,
+        zombies = {},    -- Initialize the Lua-side Trash Collector
+        wsi_state = 0    -- [NEW]: Boot directly into IDLE state for main.lua!
     }
 
     tenant.pc.aos_current_idx, tenant.pc.aos_prev_idx, tenant.pc.dt = 0, 0, 0.0
