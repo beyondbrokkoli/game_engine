@@ -6,6 +6,15 @@ local swapchain = require("swapchain")
 local renderer = require("renderer")
 local camera_mod = require("camera")
 
+-- 1. DUPLICATE THE OS TIMERS HERE
+local function sys_sleep(ms)
+    if jit.os == "Windows" then
+        ffi.C.Sleep(ms)
+    else
+        ffi.C.usleep(ms * 1000)
+    end
+end
+
 local TenantRegistry = { active = {} }
 
 function TenantRegistry.boot_tenant(vk_rt, win_id, width, height, frame_slots)
