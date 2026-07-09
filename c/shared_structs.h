@@ -49,9 +49,9 @@ typedef struct  {
     uint8_t _pad_auto_0[4];
     uint64_t swapchain_images[10];
     uint64_t swapchain_views[10];
-    VkSemaphore image_available[3];
-    VkSemaphore render_finished[3];
-    VkFence in_flight[3];
+    VkSemaphore image_available[10];
+    VkSemaphore render_finished[10];
+    VkFence in_flight[10];
     VkFence images_in_flight_fences[10];
 } VulkanSwapchainContext;
 
