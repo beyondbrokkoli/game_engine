@@ -490,33 +490,36 @@ static THREAD_FUNC render_thread_loop(void* arg) {
             VulkanDeviceContext* dev_ctx = &g_device_ctx[wid];
             VulkanSwapchainContext* win_wsi = &g_wsi_ctx[wid][active_idx];
 
-            if (win_wsi->swapchain == VK_NULL_HANDLE || L(g_wsi_state[wid]) == 0 ||
-                p->width == 0 || p->height == 0) {
+            uint32_t frame_slots = dev_ctx->max_frames_in_flight > 0 ? dev_ctx->max_frames_in_flight : 3;
+            if (frame_slots > 3) frame_slots = 3;
+            uint32_t current_frame = t_frame[wid] % frame_slots;
+
+            // --- 1. GUARANTEE GPU IS DONE WITH THIS FRAME SLOT (Immortal Fence) ---
+            VkFence immortal_fence = g_render_fences[wid][current_frame];
+            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)dev_ctx->vkWaitForFences;
+            if (pfnWait(dev_ctx->device, 1, &immortal_fence, VK_TRUE, 2000000000) == VK_TIMEOUT) {
+                printf("[C-WARN] Tenant %d: GPU Fence Timeout (CPU Starvation).\n", wid);
                 goto frame_done;
             }
 
-            uint32_t frame_slots = dev_ctx->max_frames_in_flight > 0 ? dev_ctx->max_frames_in_flight : 3;
-            if (frame_slots > 3) frame_slots = 3;
-
-            uint32_t current_frame  = t_frame[wid] % frame_slots;
-            int      finished_slot  = g_ring.active_ring_slots[wid][current_frame];
-
+            // --- 2. CLEAN UP RING BUFFER LOCKS SAFELY ---
+            int finished_slot = g_ring.active_ring_slots[wid][current_frame];
             if (finished_slot != -1 && finished_slot != read_idx) {
                 FA(g_ring.locked_mask, ~(1u << finished_slot));
             }
             g_ring.active_ring_slots[wid][current_frame] = read_idx;
 
-            VkCommandBuffer cmd_buf = g_render_cmd_buffers[wid][current_frame];
+            // --- 3. THE RETIREMENT PHASE-GATE CHECK ---
+            uint32_t w_status = atomic_load_explicit((_Atomic uint32_t*)&win_wsi->status, memory_order_acquire);
 
-            // 2. FIX: Wait on the IMMORTAL fence to strictly protect the command buffer!
-            VkFence immortal_fence = g_render_fences[wid][current_frame];
-            PFN_vkWaitForFences pfnWait = (PFN_vkWaitForFences)dev_ctx->vkWaitForFences;
-            VkResult wait_res = pfnWait(dev_ctx->device, 1, &immortal_fence, VK_TRUE, 2000000000);
-
-            if (wait_res == VK_TIMEOUT) {
-                printf("[C-WARN] Tenant %d: GPU Fence Timeout (CPU Starvation).\n", wid);
+            // If w_status != 1 (Active), the WSI is inactive, dead, or retiring (999).
+            // Abort safely BEFORE touching the Vulkan API.
+            if (win_wsi->swapchain == VK_NULL_HANDLE || L(g_wsi_state[wid]) == 0 ||
+                p->width == 0 || p->height == 0 || w_status != 1) {
                 goto frame_done;
             }
+
+            VkCommandBuffer cmd_buf = g_render_cmd_buffers[wid][current_frame];
 
             // Image Available Semaphore uses current_frame because img_idx is unknown until this returns
             PFN_vkAcquireNextImageKHR pfnAcquire = (PFN_vkAcquireNextImageKHR)dev_ctx->vkAcquireNextImageKHR;
