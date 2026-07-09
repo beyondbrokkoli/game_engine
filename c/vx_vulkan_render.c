@@ -217,8 +217,8 @@ EXPORT void vx_record_commands(VkCommandBuffer cmd, RenderPacket* p,
     preBarriers[0].dstAccessMask    = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
 
     preBarriers[1].sType            = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-    // Update preBarriers[1] for the depth image:
-    preBarriers[1].oldLayout = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    // REVERTED: We want UNDEFINED so the GPU can discard old depth data!
+    preBarriers[1].oldLayout        = VK_IMAGE_LAYOUT_UNDEFINED;
     preBarriers[1].newLayout        = VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
     preBarriers[1].image            = (VkImage)p->depth_image;
     preBarriers[1].subresourceRange = (VkImageSubresourceRange){
