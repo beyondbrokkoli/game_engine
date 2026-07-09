@@ -134,6 +134,26 @@ int main(int argc, char** argv) {
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
                 printf("[C-CORE] Tenant %d: Asynchronous WSI Flip Executed! (New Gen: %d)\n", id, active_gen + 1);
             }
+            else if (cmd == CMD_TEARDOWN_WSI && windows[id] != NULL) {
+                uint32_t active_gen = L(g_wsi_generation[id]);
+                uint32_t active_idx = active_gen % 2;
+
+                // 1. Zombify the active swapchain (120 frames to drain GPU)
+                atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][active_idx].status, 120, memory_order_release);
+
+                // 2. Flip generation to officially unbind it
+                S(g_wsi_generation[id], active_gen + 1);
+
+                // 3. Sever Render Thread access (Lock-free bypass)
+                S(g_wsi_state[id], 0);
+
+                // 4. THE FIX: Hide the window instantly. DO NOT destroy it yet!
+                glfwHideWindow(windows[id]);
+
+                // 5. Signal the Lua Orchestrator
+                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
+                printf("[C-CORE] Tenant %d: Lock-Free Teardown Initiated. Window hidden, Swapchain zombified.\n", id);
+            }
 
             /* ── Close-request intercept (all tenants) */
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
