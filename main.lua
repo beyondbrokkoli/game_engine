@@ -325,14 +325,16 @@ local function main()
                     table.insert(tnt.teardown_zombies, {
                         gfx = tnt.gfx,
                         sync = tnt.sync,
+                        sc = tnt.sc, -- [CRITICAL FIX]: Queue the swapchain wrapper!
                         surface = WindowAPI.get_surface(w_id),
                         tick_added = sim_ctx.sim_tick_count,
                         logic_purged = false
                     })
 
-                    -- 2. Nullify primary pointers so main render loop skips them safely
+                    -- 2. Nullify primary pointers so main render loop and shutdown skip them
                     tnt.gfx = nil
                     tnt.sync = nil
+                    tnt.sc = nil -- [CRITICAL FIX]
                     if WindowAPI.set_surface then WindowAPI.set_surface(w_id, nil) end
 
                     -- 3. Fire CMD_TEARDOWN_WSI (6) for the lock-free C-Core severance
@@ -512,14 +514,18 @@ local function main()
 
                     -- Phase 2 (150 Ticks): Physical Surface & OS Window destruction
                     if age > 150 then
+                        -- [CRITICAL FIX]: Lua destroys the Swapchain, NOT C-Core!
+                        if z.sc then require("swapchain").Destroy(vk_rt.vk, vk_rt, z.sc) end
+
                         if z.surface then
                             local vk_surface = ffi.cast("VkSurfaceKHR", z.surface)
                             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
                         end
 
-                        -- Execute final GLFW destruction via your API wrapper
-                        if WindowAPI.destroy then WindowAPI.destroy(win_id) end
-                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 2 (OS Window & Surface) purged.", win_id))
+                        -- [CRITICAL FIX]: Fire CMD 2 to let C-Core safely destroy the GLFW Window
+                        ffi.C.vx_sys_set_cmd(win_id, 2, 0, 0)
+
+                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 2 (WSI, Surface & OS Window) purged.", win_id))
 
                         -- The Ghost Town Wipe
                         TenantRegistry.active[win_id] = nil
@@ -575,31 +581,14 @@ local function main()
 
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
 
-    -- 1. THE MASTERSTROKE: Leverage our proven Phase-Gate isolation!
-    for win_id, tenant in pairs(TenantRegistry.active) do
-        -- [RESTORED] Force the Render Thread to idle using the sledgehammer CMD 3
-        ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0)
-    end
+    -- 1. THE TRUE MASTERSTROKE: Kill and join the C-Threads FIRST.
+    -- vx_thread_kill natively calls vkDeviceWaitIdle AND vkDestroyCommandPool.
+    -- This frees all Command Buffers, dropping all "in-use" references immediately.
+    print("[LUA IO] Sending Kill Signal to Async Overlords...")
+    EngineAPI.kill_thread()
+    print("[LUA IO] Threads Joined, Devices Idled & Command Pools Purged.")
 
-    -- 2. THE OMNISCIENCE POLL: Deterministic atomic polling
-    print("[LUA IO] Waiting for C-Core Render Multiplexer to acknowledge teardown...")
-    local all_idle = false
-    while not all_idle do
-        all_idle = true
-        for win_id, _ in pairs(TenantRegistry.active) do
-            if WindowAPI.is_tenant_idle(win_id) == 0 then
-                all_idle = false
-                break
-            end
-        end
-        if not all_idle then sys_sleep(1) end
-    end
-    print("[LUA IO] Absolute C-Core Idle Confirmed.")
-
-    -- Ensure the device is absolutely quiet. (Now completely safe to call)
-    vk_rt.vk.vkDeviceWaitIdle(vk_rt.device)
-
-    -- 3. We can safely destroy the Vulkan objects in Lua!
+    -- 2. We can now safely destroy the Vulkan objects in Lua without ANY race conditions!
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
@@ -607,10 +596,10 @@ local function main()
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Remaining Tenant %d...", win_id))
 
-        -- [FIXED] ZOMBIE PURGE: Clean up the 60-tick waiting room safely!
+        -- ZOMBIE PURGE: Clean up the 60-tick resize waiting room safely!
         if tenant.zombies then
             for _, z in ipairs(tenant.zombies) do
-                graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx)
+                if z.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx) end
                 if z.sync then
                     for i = 0, z.sync.safe_frames - 1 do
                         vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
@@ -620,23 +609,40 @@ local function main()
             tenant.zombies = {}
         end
 
-        graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx)
-        renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync)
-        swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc)
+        -- ZOMBIE PURGE V2: Purge any half-dead teardown zombies!
+        if tenant.teardown_zombies then
+            for _, z in ipairs(tenant.teardown_zombies) do
+                if z.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx) end
+                if z.sync then
+                    for i = 0, z.sync.safe_frames - 1 do
+                        vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
+                    end
+                end
+                if z.sc then swapchain_mod.Destroy(vk_rt.vk, vk_rt, z.sc) end
+                if z.surface then
+                    local vk_surface = ffi.cast("VkSurfaceKHR", z.surface)
+                    vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
+                end
+            end
+            tenant.teardown_zombies = {}
+        end
 
+        -- Destroy the active Tenant Vulkan objects (Safe to call, pointers nilled if suspended)
+        if tenant.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx) end
+        if tenant.sync then renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync) end
+        if tenant.sc then swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc) end
+
+        -- Destroy the final OS Surface and Window handles
         local surface_ptr = WindowAPI.get_surface(win_id)
         if surface_ptr ~= nil then
             local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
         end
 
-        WindowAPI.destroy(win_id)
+        if WindowAPI.destroy then WindowAPI.destroy(win_id) end
     end
 
-    -- 4. NOW kill the C-Core threads.
-    EngineAPI.kill_thread()
-
-    -- 5. Destroy the Global / Shared Engine State
+    -- 3. Destroy the Global / Shared Engine State
     require("compute_pipeline").Destroy(vk_rt.vk, vk_rt, engine_ctx.comp_state)
     require("descriptors").Destroy(vk_rt.vk, vk_rt.device, desc)
 
@@ -648,7 +654,7 @@ local function main()
     net.Shutdown()
     memory.DestroyTransferSubsystem(vk_rt)
 
-    -- 6. Shut down the core Vulkan Instance and Device
+    -- 4. Shut down the core Vulkan Instance and Device
     require("vulkan_core").Destroy(vk_rt, cfg_gfx.cfg)
     print("[LUA IO] Teardown Complete. Safe Exit.")
 end
