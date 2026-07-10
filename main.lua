@@ -327,7 +327,8 @@ local function main()
                         sync = tnt.sync,
                         sc = tnt.sc,
                         surface = WindowAPI.get_surface(w_id),
-                        time_added = total_time, -- THE FIX: Use Real Engine Time
+                        time_added = total_time,
+                        pool_purged = false, -- NEW: Track the C-Core pool reset
                         logic_purged = false
                     })
 
@@ -499,22 +500,32 @@ local function main()
             if tenant.teardown_zombies and #tenant.teardown_zombies > 0 then
                 local survivor_teardowns = {}
                 for _, z in ipairs(tenant.teardown_zombies) do
-                    -- THE FIX: Age is now in seconds, independent of the network!
                     local age = total_time - z.time_added
 
-                    -- Phase 1 (1.0 Seconds): Safely destroy logical CPU pipelines and fences
-                    if age > 1.0 and not z.logic_purged then
+                    -- Phase 0.5 (1.0 Seconds): Tell C-Core to reset the command pools (Drops WSI & Pipeline leases)
+                    if age > 1.0 and not z.pool_purged then
+                        ffi.C.vx_sys_set_cmd(win_id, 3, 0, 0)
+                        z.pool_purged = true
+                        print(string.format("[LUA GC] Tenant %d: Fired CMD 3 to purge C-Core Command Pools.", win_id))
+                    end
+
+                    -- Phase 1 (Wait for Purge): Safely destroy logical CPU pipelines and sync
+                    if z.pool_purged and not z.logic_purged and WindowAPI.get_cmd_state(win_id) == 0 then
                         if z.gfx then require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx) end
+
+                        -- THE 32-OBJECT LEAK FIX: Lua must destroy the semaphores for Teardowns!
                         if z.sync then
                             for i = 0, z.sync.safe_frames - 1 do
                                 vk_rt.vk.vkDestroyFence(vk_rt.device, z.sync.inFlight[i], nil)
+                                vk_rt.vk.vkDestroySemaphore(vk_rt.device, z.sync.imageAvailable[i], nil)
+                                vk_rt.vk.vkDestroySemaphore(vk_rt.device, z.sync.renderFinished[i], nil)
                             end
                         end
                         z.logic_purged = true
                         print(string.format("[LUA GC] Tenant %d: Teardown Phase 1 (Logical Purge) complete.", win_id))
                     end
 
-                    -- Phase 2 (2.5 Seconds): Physical Surface & OS Window destruction
+                    -- Phase 2 (2.5 Seconds): Physical WSI, Surface & OS Window destruction
                     if age > 2.5 then
                         if z.sc then require("swapchain").Destroy(vk_rt.vk, vk_rt, z.sc) end
                         if z.surface then
