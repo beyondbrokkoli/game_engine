@@ -325,9 +325,9 @@ local function main()
                     table.insert(tnt.teardown_zombies, {
                         gfx = tnt.gfx,
                         sync = tnt.sync,
-                        sc = tnt.sc, -- [CRITICAL FIX]: Queue the swapchain wrapper!
+                        sc = tnt.sc,
                         surface = WindowAPI.get_surface(w_id),
-                        tick_added = sim_ctx.sim_tick_count,
+                        time_added = total_time, -- THE FIX: Use Real Engine Time
                         logic_purged = false
                     })
 
@@ -426,8 +426,8 @@ local function main()
                 if not tenant.zombies then tenant.zombies = {} end
                 table.insert(tenant.zombies, {
                     gfx = tenant.gfx,
-                    sync = tenant.sync, -- [FIX]: Queue the sync primitives!
-                    tick_added = sim_ctx.sim_tick_count
+                    sync = tenant.sync,
+                    time_added = total_time -- THE FIX: Stamp with real clock time
                 })
 
                 -- Build New Vulkan Objects
@@ -478,7 +478,8 @@ local function main()
             if tenant.zombies and #tenant.zombies > 0 then
                 local survivor_zombies = {}
                 for _, z in ipairs(tenant.zombies) do
-                    if sim_ctx.sim_tick_count - z.tick_added > 60 then
+                    -- THE FIX: Check elapsed real time instead of simulation ticks
+                    if total_time - z.time_added > 1.0 then
                         require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx)
 
                         -- [FIX]: C-Core destroys the semaphores, so we MUST ONLY destroy the fences!
@@ -498,10 +499,11 @@ local function main()
             if tenant.teardown_zombies and #tenant.teardown_zombies > 0 then
                 local survivor_teardowns = {}
                 for _, z in ipairs(tenant.teardown_zombies) do
-                    local age = sim_ctx.sim_tick_count - z.tick_added
+                    -- THE FIX: Age is now in seconds, independent of the network!
+                    local age = total_time - z.time_added
 
-                    -- Phase 1 (60 Ticks): Safely destroy logical CPU pipelines and fences
-                    if age > 60 and not z.logic_purged then
+                    -- Phase 1 (1.0 Seconds): Safely destroy logical CPU pipelines and fences
+                    if age > 1.0 and not z.logic_purged then
                         if z.gfx then require("graphics_pipeline").Destroy(vk_rt.vk, vk_rt, z.gfx) end
                         if z.sync then
                             for i = 0, z.sync.safe_frames - 1 do
@@ -512,25 +514,19 @@ local function main()
                         print(string.format("[LUA GC] Tenant %d: Teardown Phase 1 (Logical Purge) complete.", win_id))
                     end
 
-                    -- Phase 2 (150 Ticks): Physical Surface & OS Window destruction
-                    if age > 150 then
-                        -- [CRITICAL FIX]: Lua destroys the Swapchain, NOT C-Core!
+                    -- Phase 2 (2.5 Seconds): Physical Surface & OS Window destruction
+                    if age > 2.5 then
                         if z.sc then require("swapchain").Destroy(vk_rt.vk, vk_rt, z.sc) end
-
                         if z.surface then
                             local vk_surface = ffi.cast("VkSurfaceKHR", z.surface)
                             vk_rt.vk.vkDestroySurfaceKHR(vk_rt.instance, vk_surface, nil)
                         end
 
-                        -- [CRITICAL FIX]: Fire CMD 2 to let C-Core safely destroy the GLFW Window
                         ffi.C.vx_sys_set_cmd(win_id, 2, 0, 0)
+                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 2 (OS Window & Surface) purged.", win_id))
 
-                        print(string.format("[LUA GC] Tenant %d: Teardown Phase 2 (WSI, Surface & OS Window) purged.", win_id))
-
-                        -- The Ghost Town Wipe
                         TenantRegistry.active[win_id] = nil
 
-                        -- [GLOBAL SHUTDOWN CHECK]
                         local active_count = 0
                         for _ in pairs(TenantRegistry.active) do active_count = active_count + 1 end
                         if active_count == 0 then
@@ -542,7 +538,6 @@ local function main()
                     end
                 end
 
-                -- Only assign survivors if the tenant wasn't just wiped
                 if TenantRegistry.active[win_id] then
                     tenant.teardown_zombies = survivor_teardowns
                 end
@@ -582,13 +577,13 @@ local function main()
     print("\n[LUA IO] Render Loop Terminated. Commencing Teardown...")
 
     -- 1. THE TRUE MASTERSTROKE: Kill and join the C-Threads FIRST.
-    -- vx_thread_kill natively calls vkDeviceWaitIdle AND vkDestroyCommandPool.
-    -- This frees all Command Buffers, dropping all "in-use" references immediately.
+    -- This natively calls vkDeviceWaitIdle AND vkDestroyCommandPool, instantly dropping
+    -- all "in use" references so Lua can safely destroy the objects without validation errors.
     print("[LUA IO] Sending Kill Signal to Async Overlords...")
     EngineAPI.kill_thread()
     print("[LUA IO] Threads Joined, Devices Idled & Command Pools Purged.")
 
-    -- 2. We can now safely destroy the Vulkan objects in Lua without ANY race conditions!
+    -- 2. We can now safely destroy the Vulkan objects in Lua!
     local graphics_mod = require("graphics_pipeline")
     local renderer_mod = require("renderer")
     local swapchain_mod = require("swapchain")
@@ -596,7 +591,6 @@ local function main()
     for win_id, tenant in pairs(TenantRegistry.active) do
         print(string.format("[TEARDOWN] Purging Remaining Tenant %d...", win_id))
 
-        -- ZOMBIE PURGE: Clean up the 60-tick resize waiting room safely!
         if tenant.zombies then
             for _, z in ipairs(tenant.zombies) do
                 if z.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx) end
@@ -609,7 +603,6 @@ local function main()
             tenant.zombies = {}
         end
 
-        -- ZOMBIE PURGE V2: Purge any half-dead teardown zombies!
         if tenant.teardown_zombies then
             for _, z in ipairs(tenant.teardown_zombies) do
                 if z.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, z.gfx) end
@@ -627,12 +620,10 @@ local function main()
             tenant.teardown_zombies = {}
         end
 
-        -- Destroy the active Tenant Vulkan objects (Safe to call, pointers nilled if suspended)
         if tenant.gfx then graphics_mod.Destroy(vk_rt.vk, vk_rt, tenant.gfx) end
         if tenant.sync then renderer_mod.Destroy(vk_rt.vk, vk_rt.device, tenant.sync) end
         if tenant.sc then swapchain_mod.Destroy(vk_rt.vk, vk_rt, tenant.sc) end
 
-        -- Destroy the final OS Surface and Window handles
         local surface_ptr = WindowAPI.get_surface(win_id)
         if surface_ptr ~= nil then
             local vk_surface = ffi.cast("VkSurfaceKHR", surface_ptr)
