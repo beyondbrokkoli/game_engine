@@ -289,12 +289,6 @@ EXPORT void vx_sys_set_cmd(int win_id, int cmd, int w, int h) {
     S(g_engine.mailbox.tenants[win_id].glfw_cmd, cmd);
 }
 
-EXPORT int vx_sys_get_cmd(int win_id) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    // Uses acquire semantics to ensure we see the C-core's memset barrier
-    return L(g_engine.mailbox.tenants[win_id].glfw_cmd);
-}
-
 EXPORT void vx_sys_window_size(int win_id, int* w, int* h) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) {
         *w = 0; *h = 0;

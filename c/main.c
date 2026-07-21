@@ -51,14 +51,16 @@ int main(int argc, char** argv) {
     while (vx_core_is_running()) {
 
         glfwPollEvents();
-        vx_pump_zombie_gc(); // Non-blocking async GC check for dead swapchains
 
         /* ── Per-tenant command dispatch */
         for (int id = 0; id < MAX_WINDOWS; id++) {
+            // 1. Use atomic_load (L) instead of atomic_exchange (E_A)!
             // Do not wipe the mailbox. Just peek at it.
             int cmd = L(g_engine.mailbox.tenants[id].glfw_cmd);
 
             if (cmd == CMD_BOOT_WINDOW && windows[id] == NULL) {
+                // ... (your existing mid-loop boot code remains here) ...
+                // NO GLOBAL FREEZE. We just create the window.
                 int w = L_R(g_engine.mailbox.tenants[id].glfw_arg_w);
                 int h = L_R(g_engine.mailbox.tenants[id].glfw_arg_h);
 
@@ -85,6 +87,7 @@ int main(int argc, char** argv) {
                         printf("[C-CORE] Tenant %d: Mid-loop Window & Surface Created!\n", id);
                     }
                 }
+                // 2. Clear the command ONLY after we successfully process it
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
             }
             else if (cmd == CMD_KILL_WINDOW && windows[id] != NULL) {
@@ -92,8 +95,9 @@ int main(int argc, char** argv) {
                 int timeout = 2000;
                 int spin_count = 0;
 
+                // STRAGGLER FIX: Wait for BOTH threads to yield before destroying the OS window
                 while ((L(g_render_busy[id]) || L(g_transfer_busy[id])) && timeout > 0) {
-                    if (spin_count >= 2000) { timeout--; }
+                    if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
                     vx_spin_wait(&spin_count);
                 }
 
@@ -103,69 +107,16 @@ int main(int argc, char** argv) {
                 S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
                 printf("[C-CORE] Tenant %d OS Window Destroyed Safely.\n", id);
             }
-            else if (cmd == CMD_PREPARE_NEW_WSI) {
-                uint32_t active_gen = L(g_wsi_generation[id]);
-                uint32_t active_idx = active_gen % 2;
-                uint32_t inactive_idx = (active_gen + 1) % 2;
-
-                VulkanSwapchainContext* new_wsi = &g_wsi_ctx[id][inactive_idx];
-                VulkanSwapchainContext* old_wsi = &g_wsi_ctx[id][active_idx]; // We need the old one
-
-                uint32_t slot_status = atomic_load_explicit((_Atomic uint32_t*)&new_wsi->status, memory_order_acquire);
-                if (slot_status != 0) {
-                    continue;
-                }
-
-                // --- THE FIX: Mark the active WSI as 'Retiring' BEFORE Lua calls vkCreateSwapchainKHR ---
-                // '999' acts as a barrier so the Render Thread stops calling vkAcquireNextImageKHR.
-                // It will be safely overwritten to 120 (Zombie) when Lua fires CMD_FLIP_WSI.
-                atomic_store_explicit((_Atomic uint32_t*)&old_wsi->status, 999, memory_order_release);
-
-                // Purge memory so Lua inherits a pristine environment
-                memset(new_wsi, 0, sizeof(VulkanSwapchainContext));
-
-                // Architecture Fix: Yield directly to Lua's FFI for WSI creation.
-                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                printf("[C-CORE] Tenant %d: Slot %d cleared. Yielding WSI build to Lua.\n", id, inactive_idx);
-            }
-            else if (cmd == CMD_FLIP_WSI) {
-                uint32_t active_gen = L(g_wsi_generation[id]);
-                uint32_t active_idx = active_gen % 2;
-                uint32_t inactive_idx = (active_gen + 1) % 2;
-
-                // Explicit casts to bypass Lua SSoT constraints on the uint32_t status field
-
-                // Set zombie countdown to 120 frames (roughly 2 seconds of safety buffer)
-                atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][active_idx].status, 120, memory_order_release);
-
-                atomic_store_explicit((_Atomic uint32_t*)&g_wsi_ctx[id][inactive_idx].status, 1, memory_order_release);
-
-                // THE HOLY GRAIL FLIP
-                S(g_wsi_generation[id], active_gen + 1);
-
-                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                printf("[C-CORE] Tenant %d: Asynchronous WSI Flip Executed! (New Gen: %d)\n", id, active_gen + 1);
-            }
-            else if (cmd == CMD_TEARDOWN_WSI && windows[id] != NULL) {
-                // THE FIX: Do NOT zombify the swapchain here. Without v-sync throttling,
-                // 120 loops happen in 1ms, causing a fatal Vulkan Device Loss!
-                // Let Lua handle the strict age-gated teardown.
-
-                // 1. Sever Render Thread access (Lock-free bypass)
-                S(g_wsi_state[id], 0);
-
-                // 2. The Illusion: Hide the window instantly. DO NOT destroy it yet!
-                glfwHideWindow(windows[id]);
-
-                // 3. Signal the Lua Orchestrator
-                S(g_engine.mailbox.tenants[id].glfw_cmd, CMD_IDLE);
-                printf("[C-CORE] Tenant %d: Lock-Free Teardown Initiated. Render thread severed.\n", id);
-            }
 
             /* ── Close-request intercept (all tenants) */
             if (windows[id] && glfwWindowShouldClose(windows[id])) {
                 S(g_engine.mailbox.tenants[id].last_key_pressed,
                   GLFW_KEY_ESCAPE);
+
+                // Do NOT reset the close flag here.
+                // Let C persistently spam the ESCAPE signal to the mailbox.
+                // The loop will naturally break when Lua sends CMD_KILL_WINDOW
+                // and sets windows[id] = NULL.
             }
         }
 

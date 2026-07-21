@@ -43,15 +43,6 @@
 #include <sched.h> /* Required for sched_yield() */
 #define SLEEP_MS(ms) usleep((ms) * 1000)
 
-// --- WINDOWS INCLUDES MOVED UP HERE ---
-#if defined(_WIN32) || defined(_WIN64)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>  /* Required for SwitchToThread() */
-#include <timeapi.h>
-#pragma comment(lib, "winmm.lib")
-#endif
-
 /* ── Tiered Backoff Spinlock Wait */
 static inline void vx_spin_wait(int* spin_count) {
     if (*spin_count < 1000) {
@@ -75,6 +66,14 @@ typedef pthread_t vmath_thread_t;
 #define THREAD_FUNC        void*
 #define THREAD_RETURN_VAL NULL
 
+#if defined(_WIN32) || defined(_WIN64)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+#endif
+
 #if defined(_WIN32)
 #define EXPORT __declspec(dllexport)
 #else
@@ -93,10 +92,6 @@ typedef pthread_t vmath_thread_t;
 #define CMD_BOOT_WINDOW    1
 #define CMD_KILL_WINDOW    2
 #define CMD_REBUILD_WSI    3
-// Add to c/vx_global_state.h
-#define CMD_PREPARE_NEW_WSI 4
-#define CMD_FLIP_WSI 5
-#define CMD_TEARDOWN_WSI 6
 #define MAX_WINDOWS        4
 #define RING_SIZE          16
 #define TRANSFER_RING_SIZE 16
@@ -170,12 +165,7 @@ extern "C" {
 
 extern EngineState       g_engine;
 extern RenderRing        g_ring;
-
-// NEW: Double-Buffered Decoupled Contexts
-extern VulkanDeviceContext    g_device_ctx[MAX_WINDOWS];
-extern VulkanSwapchainContext g_wsi_ctx[MAX_WINDOWS][2];
-extern _Atomic uint32_t       g_wsi_generation[MAX_WINDOWS];
-
+extern RenderThreadInit  g_window_wsi[MAX_WINDOWS];
 extern atomic_int        g_wsi_state[MAX_WINDOWS];
 extern atomic_int g_render_busy[MAX_WINDOWS];
 extern atomic_int g_transfer_busy[MAX_WINDOWS]; // ADD THIS
@@ -192,7 +182,6 @@ extern VkCommandPool     g_render_cmd_pools[MAX_WINDOWS];
 extern VkCommandPool     g_transfer_cmd_pools[MAX_WINDOWS];
 extern VkCommandBuffer   g_render_cmd_buffers[MAX_WINDOWS][3];
 extern VkCommandBuffer   g_transfer_cmd_buffers[MAX_WINDOWS];
-extern VkFence           g_render_fences[MAX_WINDOWS][3]; // NEW IMMORTAL FENCES
 extern VkFence           g_transfer_fences[MAX_WINDOWS];
 
 /* ── Global-State Function Prototypes */
@@ -208,12 +197,7 @@ EXPORT void     vx_sys_dump_ring_state(int win_id);
 EXPORT RenderPacket* vx_stream_packet(int idx);
 EXPORT int           vx_stream_acquire(int win_id);
 EXPORT void          vx_stream_commit(int win_id, int idx);
-// UPDATED SIGNATURE:
-EXPORT void          vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx);
-EXPORT void vx_pump_zombie_gc(void);
-
-EXPORT uint32_t vx_sys_get_wsi_generation(int win_id);
-EXPORT VulkanSwapchainContext* vx_sys_get_inactive_wsi_slot(int win_id);
+EXPORT void          vx_stream_init(int win_id, RenderThreadInit* wsi);
 
 #ifdef __cplusplus
 }

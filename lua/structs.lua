@@ -23,13 +23,19 @@ end
 
 M.specs = {
     {
-        name = "VulkanDeviceContext",
+        name = "RenderThreadInit",
         c_only = true, vk_shield = true, wire_format = false, force_align = false, glsl_std430 = false,
         members = {
             { type = "VkDevice", name = "device" },
             { type = "VkQueue", name = "queue" },
             { type = "VkQueue", name = "transfer_queue" },
-            { type = "uint32_t", name = "max_frames_in_flight" },
+            { type = "VkSwapchainKHR", name = "swapchain" },
+            { type = "uint32_t", name = "max_frames_in_flight" }, -- [INJECTED TRACKER]
+            { type = "uint64_t", name = "swapchain_images", count = 10 },
+            { type = "uint64_t", name = "swapchain_views", count = 10 },
+            { type = "VkSemaphore", name = "image_available", count = 10 },
+            { type = "VkSemaphore", name = "render_finished", count = 10 },
+            { type = "VkFence", name = "in_flight", count = 10 },
             { type = "void*", name = "vkWaitForFences" },
             { type = "void*", name = "vkAcquireNextImageKHR" },
             { type = "void*", name = "vkResetFences" },
@@ -43,20 +49,6 @@ M.specs = {
             { type = "void*", name = "pfnSetDepthTestEnable" },
             { type = "void*", name = "pfnSetDepthWriteEnable" },
             { type = "void*", name = "pfnSetDepthCompareOp" }
-        }
-    },
-    {
-        name = "VulkanSwapchainContext",
-        c_only = true, vk_shield = true, wire_format = false, force_align = false, glsl_std430 = false,
-        members = {
-            { type = "VkSwapchainKHR", name = "swapchain" },
-            { type = "uint32_t", name = "status" }, -- 0 = INACTIVE, 1 = ACTIVE, 2 = RETIRING
-            { type = "uint64_t", name = "swapchain_images", count = 10 },
-            { type = "uint64_t", name = "swapchain_views", count = 10 },
-            { type = "VkSemaphore", name = "image_available", count = 10 },
-            { type = "VkSemaphore", name = "render_finished", count = 10 },
-            { type = "VkFence", name = "in_flight", count = 10 },
-            { type = "VkFence", name = "images_in_flight_fences", count = 10 }
         }
     },
     {
@@ -124,15 +116,16 @@ M.specs = {
             { type = "uint64_t", name = "gfx_layout" },
             { type = "uint64_t", name = "vertex_buffer" },
             { type = "uint64_t", name = "index_buffer" },
+            { type = "uint64_t", name = "swapchain_image" },
+            { type = "uint64_t", name = "swapchain_view" },
             { type = "uint64_t", name = "depth_image" },
             { type = "uint64_t", name = "depth_view" },
             { type = "uint32_t", name = "width" },
-            { type = "uint32_t", name = "height" },
-            { type = "uint32_t", name = "swapchain_generation" }
+            { type = "uint32_t", name = "height" }
         }
     },
     {
-        name = "PlayerCommand", align = 4,
+        name = "PlayerCommand", align = 4, -- [!] PATCHED: Bumped from 1 to 4 to match C padding
         c_only = true, vk_shield = false, wire_format = true, force_align = true, glsl_std430 = false,
         members = {
             { type = "uint8_t", name = "opcode" },
@@ -185,7 +178,7 @@ M.specs = {
         c_only = true, vk_shield = false, wire_format = false, force_align = false, glsl_std430 = false,
         members = {
             { type = "uint16_t", name = "len" },
-            { type = "uint8_t", name = "data", count = 4096 }
+            { type = "uint8_t", name = "data", count = 4096 } -- [!] FIX: Matches C payload capacity
         }
     },
     {
@@ -198,11 +191,11 @@ M.specs = {
             { type = "uint32_t", name = "state_checksum" },
             { type = "uint32_t", name = "base_tick" },
             { type = "uint8_t", name = "player_id" },
-            { type = "uint8_t", name = "is_ping" },
+            { type = "uint8_t", name = "is_ping" }, -- Maps over the 'history_count' byte safely
             { type = "uint16_t", name = "_align_pad" },
-            { type = "uint32_t", name = "padding", count = 3 }
+            { type = "uint32_t", name = "padding", count = 3 } -- Pads the struct out to exactly 40 bytes
         }
-    }
+    },
 }
 
 -- 2. THE LAYOUT COMPILER & INVARIANT ENFORCER

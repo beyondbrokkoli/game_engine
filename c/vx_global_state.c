@@ -7,13 +7,11 @@
 /* ── Global Variable Definitions */
 
 EngineState g_engine;
+
+/* Rely on BSS for structural zeroing; atomics strictly initialized in vx_init_mailbox */
 RenderRing g_ring;
 
-// NEW: Double-Buffered Globals
-VulkanDeviceContext    g_device_ctx[MAX_WINDOWS];
-VulkanSwapchainContext g_wsi_ctx[MAX_WINDOWS][2];
-_Atomic uint32_t       g_wsi_generation[MAX_WINDOWS];
-
+RenderThreadInit g_window_wsi[MAX_WINDOWS];
 atomic_int       g_wsi_state[MAX_WINDOWS];
 atomic_int       g_render_busy[MAX_WINDOWS];
 atomic_int       g_transfer_busy[MAX_WINDOWS]; // ADD THIS
@@ -30,7 +28,6 @@ VkCommandPool    g_render_cmd_pools[MAX_WINDOWS];
 VkCommandPool    g_transfer_cmd_pools[MAX_WINDOWS];
 VkCommandBuffer  g_render_cmd_buffers[MAX_WINDOWS][3];
 VkCommandBuffer  g_transfer_cmd_buffers[MAX_WINDOWS];
-VkFence          g_render_fences[MAX_WINDOWS][3]; // NEW IMMORTAL FENCES
 VkFence          g_transfer_fences[MAX_WINDOWS];
 
 /* ── Threading Helpers */
@@ -170,15 +167,16 @@ EXPORT void vx_stream_commit(int win_id, int idx) {
     S(g_ring.ready_idx[win_id], idx);
 }
 
-EXPORT void vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx) {
+EXPORT void vx_stream_init(int win_id, RenderThreadInit* wsi) {
     if (win_id < 0 || win_id >= MAX_WINDOWS) return;
 
     S(g_wsi_state[win_id], 0);
     int timeout = 2000;
     int spin_count = 0;
 
+    // Update this loop to wait on BOTH threads
     while (L(g_render_busy[win_id]) || L(g_transfer_busy[win_id])) {
-        if (spin_count >= 2000) { timeout--; }
+        if (spin_count >= 2000) { timeout--; } // Only decrement on Tier 3
         if (timeout <= 0) {
             printf("[C-FATAL] Threads failed to release busy flags "
                    "for Tenant %d. Aborting init to prevent corruption.\n", win_id);
@@ -187,13 +185,7 @@ EXPORT void vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx) {
         vx_spin_wait(&spin_count);
     }
 
-    // 1. Copy Immutable Context
-    g_device_ctx[win_id] = *dev_ctx;
-
-    // 2. Initialize WSI double-buffer state
-    S(g_wsi_generation[win_id], 0);
-    memset(&g_wsi_ctx[win_id][0], 0, sizeof(VulkanSwapchainContext));
-    memset(&g_wsi_ctx[win_id][1], 0, sizeof(VulkanSwapchainContext));
+    g_window_wsi[win_id] = *wsi;
 
     int      offset      = win_id * 4;
     uint32_t tenant_mask = 0xFu << offset;
@@ -207,20 +199,4 @@ EXPORT void vx_stream_init(int win_id, VulkanDeviceContext* dev_ctx) {
     }
 
     S(g_wsi_state[win_id], 1);
-}
-
-EXPORT uint32_t vx_sys_get_wsi_generation(int win_id) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) return 0;
-    // Return the active generation using acquire semantics
-    return L(g_wsi_generation[win_id]);
-}
-
-EXPORT VulkanSwapchainContext* vx_sys_get_inactive_wsi_slot(int win_id) {
-    if (win_id < 0 || win_id >= MAX_WINDOWS) return NULL;
-
-    uint32_t active_gen = L(g_wsi_generation[win_id]);
-    uint32_t inactive_idx = (active_gen + 1) % 2;
-
-    // Return a direct pointer to the dormant slot so Lua's FFI can populate it
-    return &g_wsi_ctx[win_id][inactive_idx];
 }
