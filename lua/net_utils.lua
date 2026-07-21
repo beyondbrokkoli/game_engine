@@ -233,26 +233,43 @@ function NetUtils.BootstrapNetworkTopology(local_port, my_local_ip)
     end
 
     print("[ICE] Sync window closed. Evaluating routing topologies...")
+
+    local needs_relay = false
+    local fallback_peer = 0
+
     for peer_id, active in pairs(active_peers) do
         if active then
             if p2p_established[peer_id] then
                 print(string.format("[ROUTING] Node %d -> P2P [DIRECT RESIDENTIAL]", peer_id))
             else
                 print(string.format("[ROUTING] Node %d -> P2P [FAILED]. Tagged for Omnibus Relay.", peer_id))
+
+                -- 1. Overwrite the dead WAN IP with the Relay IP
+                net.Connect(peer_id, cfg_net.RELAY_IP, cfg_net.RELAY_PORT)
+
+                -- 2. THE JEDI MIND TRICK: Lie to the game engine!
+                -- Force it to use the hijacked peer slot instead of the dead Slot 8.
+                p2p_established[peer_id] = true
+
+                needs_relay = true
+                fallback_peer = peer_id
             end
         end
     end
 
     net.SetRelayIP(cfg_net.RELAY_IP)
-    net.Connect(cfg_net.MAX_PLAYERS, cfg_net.RELAY_IP, cfg_net.RELAY_PORT)
 
-    local reg_pkt = ffi.new("IcePunchPacket")
-    reg_pkt.session_token = session_token
-    reg_pkt.player_id = local_id
-    reg_pkt.is_ping = 0
+    -- Send the Wake-Up packet to punch the NAT and register our IP with the Python Relay
+    if needs_relay then
+        local reg_pkt = ffi.new("IcePunchPacket")
+        reg_pkt.session_token = session_token
+        reg_pkt.player_id = local_id
+        reg_pkt.is_ping = 0
 
-    local ice_packet_size = ffi.sizeof("IcePunchPacket")
-    net.SendTo(reg_pkt, ice_packet_size, cfg_net.MAX_PLAYERS)
+        local ice_packet_size = ffi.sizeof("IcePunchPacket")
+        net.SendTo(reg_pkt, ice_packet_size, fallback_peer)
+        print("[SYSTEM] Sent Relay wake-up sequence.")
+    end
 
     print("[SYSTEM] All routes bound. Drop-in complete.")
     return session_token, local_id, p2p_established, active_peers, status_data
