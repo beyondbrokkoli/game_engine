@@ -93,6 +93,10 @@ function Pump.init(app_ctx)
                     current_run_count = current_run_count + 1
                     if current_run_count == 255 then
                         tx_buffer[offset] = current_run_count
+                        if (offset + 17) > max_packet_size then
+                            print("[WARNING] RLE Compressor hit MTU threshold. Truncating history.")
+                            break
+                        end
                         ffi.copy(tx_buffer + offset + 1, current_cmd_ptr, 16)
                         offset = offset + 17
                         current_run_count = 0
@@ -198,8 +202,8 @@ function Pump.init(app_ctx)
                                 h_frame.tick = h_tick
                                 h_frame.state = STATE_EMPTY
                                 for p_scan = 0, MAX_PLAYERS - 1 do
-                                    h_frame.commands[p_scan][0].opcode = 0
-                                    h_frame.commands[p_scan][1].opcode = 0
+                                    -- Flushes the full 16-byte block (both slots) to zero
+                                    ffi.fill(h_frame.commands[p_scan], 16)
                                 end
                                 h_frame.state_checksum = 0
                                 h_frame.remote_checksum = 0
