@@ -41,7 +41,17 @@
 #include <pthread.h>
 #include <unistd.h>
 #include <sched.h> /* Required for sched_yield() */
+
+#if defined(_WIN32) || defined(_WIN64)
+#define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
+#include <windows.h>
+#include <timeapi.h>
+#pragma comment(lib, "winmm.lib")
+#define SLEEP_MS(ms) Sleep(ms)
+#else
 #define SLEEP_MS(ms) usleep((ms) * 1000)
+#endif
 
 /* ── Tiered Backoff Spinlock Wait */
 static inline void vx_spin_wait(int* spin_count) {
@@ -65,14 +75,6 @@ static inline void vx_spin_wait(int* spin_count) {
 typedef pthread_t vmath_thread_t;
 #define THREAD_FUNC        void*
 #define THREAD_RETURN_VAL NULL
-
-#if defined(_WIN32) || defined(_WIN64)
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
-#include <timeapi.h>
-#pragma comment(lib, "winmm.lib")
-#endif
 
 #if defined(_WIN32)
 #define EXPORT __declspec(dllexport)
