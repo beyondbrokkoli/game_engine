@@ -80,17 +80,17 @@ print("--- AI SNAPSHOT ---")
 
 local order = {
     -- 1. C-CORE & HEADERS (Absolute Foundation)
-     "c/shared_structs.h",
-     "c/vx_global_state.h",
+--     "c/shared_structs.h",
+--     "c/vx_global_state.h",
 --     "c/vx_vulkan_core.h",
-     "c/vx_vulkan_render.h",
+--     "c/vx_vulkan_render.h",
 --     "c/vx_glfw_multiplexer.h",
-     "c/vx_global_state.c",
+--     "c/vx_global_state.c",
 --     "c/vx_vulkan_core.c",
 --     "c/vx_glfw_multiplexer.c",
-     "c/vx_vulkan_render.c",
+--     "c/vx_vulkan_render.c",
 --     "c/vx_net.c",
-     "c/main.c",
+--     "c/main.c",
 
     -- 2. GLSL SHADERS & SSOT
     -- "glsl/shared.glsl",
@@ -141,7 +141,7 @@ local order = {
 --    "lua/tenant_registry.lua",   -- Needs swapchain, renderer, camera, etc.
 
 --    -- 7. ENTRY POINTS (Masters)
---    "build.lua",
+    "build.lua",
 --    "main.lua",
 }
 

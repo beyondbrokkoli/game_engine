@@ -1,11 +1,8 @@
 import os
 import uuid
-import requests
 import fnmatch
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
-
-import os
 from google import genai
 
 # The SDK automatically checks os.environ["GEMINI_API_KEY"]
@@ -14,11 +11,7 @@ client = genai.Client()
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "weaver_stable"
-
-# Nomic Embedding Server
-EMBED_API_URL = "http://10.0.0.2:8081/v1/embeddings"
-API_KEY = "TEST1234"
-NOMIC_DIMENSIONS = 768
+GEMINI_DIMENSIONS = 768  # Native dimension size for text-embedding-004
 
 TARGET_DIRS = ["c", "lua", "glsl", "scripts"]
 ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert", ".py", ".sh"}
@@ -44,7 +37,7 @@ def is_blacklisted(filepath):
     return False
 
 def get_embedding(text):
-    # Replaces the Nomic local call
+    """Generates an embedding vector using Gemini."""
     response = client.models.embed_content(
         model="text-embedding-004",
         contents=text,
@@ -61,7 +54,9 @@ def chunk_file(filepath, chunk_size=60, overlap=15):
         lines = f.read().split('\n')
 
     chunks = []
-    for i in range(0, len(lines), chunk_size - overlap):
+    # Using max(1, ...) to prevent step size 0 if overlap >= chunk_size
+    step = max(1, chunk_size - overlap) 
+    for i in range(0, len(lines), step):
         chunk_lines = lines[i:i + chunk_size]
         chunk_text = '\n'.join(chunk_lines).strip()
         if chunk_text:
@@ -70,16 +65,16 @@ def chunk_file(filepath, chunk_size=60, overlap=15):
 
 def main():
     print("Connecting to Qdrant...")
-    client = QdrantClient(url=QDRANT_URL)
+    qdrant = QdrantClient(url=QDRANT_URL)
 
     # --- Wipe the slate clean for a fresh session ---
-    if client.collection_exists(collection_name=COLLECTION_NAME):
+    if qdrant.collection_exists(collection_name=COLLECTION_NAME):
         print(f"Purging stale vectors from '{COLLECTION_NAME}'...")
-        client.delete_collection(collection_name=COLLECTION_NAME)
+        qdrant.delete_collection(collection_name=COLLECTION_NAME)
 
-    client.create_collection(
+    qdrant.create_collection(
         collection_name=COLLECTION_NAME,
-        vectors_config=VectorParams(size=NOMIC_DIMENSIONS, distance=Distance.COSINE),
+        vectors_config=VectorParams(size=GEMINI_DIMENSIONS, distance=Distance.COSINE),
     )
     print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.")
 
@@ -122,7 +117,7 @@ def main():
 
     if points:
         print(f"\nUpserting {len(points)} chunks into Qdrant...")
-        client.upsert(
+        qdrant.upsert(
             collection_name=COLLECTION_NAME,
             points=points
         )
