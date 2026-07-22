@@ -1,7 +1,10 @@
 io.stdout:setvbuf("no")
 package.path = "./lua/?.lua;" .. package.path
 
--- 1. BEDROCK (Stateless APIs & Memory Layouts)
+-- [CRITICAL]: Intercept and mock C-Core dependencies immediately
+require("headless_api")
+
+-- Now we can safely pull in the bedrock
 local ffi = require("ffi")
 local structs = require("structs")
 local cfg_sim = require("config_sim")
