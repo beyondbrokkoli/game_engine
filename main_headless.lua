@@ -24,6 +24,7 @@ local NetUtils = require("net_utils")
 local Game = require("game_state").init(app_ctx)
 local Pump = require("net_pump").init(app_ctx)
 local FSM = require("fsm_core").init(app_ctx, Game)
+local InputCore = require("input_core")
 
 -- 3. TIMING SUBSYSTEM
 local function sys_sleep(ms)
@@ -122,6 +123,8 @@ local function main()
     end
 
     print("[LUA IO] Booting Headless Weaver (WAN SERVER MODE)...")
+    -- Give the Lua math library a unique starting seed per node
+    math.randomseed(os.time() + ctx.net_identity)
     print("[NET] Simulation primed. Awaiting Timeline Synchronization...")
 
     local last_time = get_time_hires()
@@ -147,6 +150,22 @@ local function main()
         execute_heartbeat_diagnostic(ctx)
 
         if ctx.net_accumulator >= FIXED_DT then
+
+            -- ==============================================================
+            -- [SURGICAL PATCH: TRUE RANDOM HEADLESS SPAM]
+            -- Emulating a chaotic human wildly clicking on the grid
+            -- ==============================================================
+            -- 10% chance to fire an input this tick
+            if math.random(1, 100) <= 10 then
+                -- Pick a completely random tile from the board
+                local random_tile = math.random(0, ctx.total_tiles - 1)
+
+                InputCore.HandleTerrainClick(ctx, random_tile)
+
+                print(string.format("[BRUTEFORCE] Peer %d randomly clicked tile %d at tick %d",
+                    ctx.net_identity, random_tile, ctx.sim_tick_count))
+            end
+
             Pump.send_dynamic_history(ctx)
             ctx.net_accumulator = ctx.net_accumulator % FIXED_DT
         end
