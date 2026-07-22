@@ -166,25 +166,23 @@ def main():
                     if not source_code:
                         continue
 
-                    dependencies = topology.get(module_name, [])
-                    dep_string = ", ".join(dependencies) if dependencies else "None (Level 0 / Root)"
-
-                    # --- INVARIANT ASSERTION ---
+                    # --- INVARIANT ASSERTION & DEPENDENCY RESOLUTION ---
                     if ext == ".lua":
-                            # Lua uses the name without extension
-                            dependencies = topology_lua.get(module_name, [])
-                            validate_lua_invariants(module_name, source_code, dependencies)
-                            print(f" [VALIDATED] {module_name}.lua strict requires match deps.dot.")
+                        dependencies = topology_lua.get(module_name, [])
+                        validate_lua_invariants(module_name, source_code, dependencies)
+                        print(f" [VALIDATED] {module_name}.lua strict requires match deps.dot.")
 
-                        elif ext in [".c", ".h"]:
-                            # C uses the full filename to differentiate headers from sources
-                            dependencies = topology_c.get(file, [])
-                            validate_c_invariants(file, source_code, dependencies)
-                            print(f" [VALIDATED] {file} strict includes match deps_c.dot.")
+                    elif ext in [".c", ".h"]:
+                        dependencies = topology_c.get(file, [])
+                        validate_c_invariants(file, source_code, dependencies)
+                        print(f" [VALIDATED] {file} strict includes match deps_c.dot.")
 
-                        else:
-                            # GLSL shaders fall through here un-asserted for now
-                            dependencies = []
+                    else:
+                        # GLSL shaders fall through here un-asserted for now
+                        dependencies = []
+
+                    # Now that dependencies is safely defined by the correct topology, build the string
+                    dep_string = ", ".join(dependencies) if dependencies else "None (Level 0 / Root)"
 
                     contextual_payload = (
                         f"MODULE: {filepath}\n"
