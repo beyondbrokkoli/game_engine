@@ -44,13 +44,16 @@ def is_blacklisted(filepath):
     return False
 
 def get_embedding(text):
-    result = genai.embed_content(
-        model="models/text-embedding-004",
-        content=text,
-        task_type="retrieval_document",
-        title="weaver_engine_source" # Optional, but helps the model map the context
+    # Replaces the Nomic local call
+    response = client.models.embed_content(
+        model="text-embedding-004",
+        contents=text,
+        config=dict(
+            task_type="RETRIEVAL_DOCUMENT",
+            title="weaver_engine_source"
+        )
     )
-    return result['embedding']
+    return response.embeddings[0].values
 
 def chunk_file(filepath, chunk_size=60, overlap=15):
     """Chunks text by lines with an overlap to maintain context."""
