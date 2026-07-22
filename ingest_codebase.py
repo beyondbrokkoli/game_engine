@@ -21,7 +21,9 @@ GEMINI_DIMENSIONS = 768
 
 TARGET_DIRS = ["c", "lua", "glsl", "scripts"]
 ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert"}
-DOT_FILE = "deps.dot"
+
+DOT_FILE_LUA = "deps.dot"
+DOT_FILE_C = "deps_c.dot"
 
 BLACKLIST = [
     "vulkan_headers.lua",
@@ -30,6 +32,8 @@ BLACKLIST = [
     "*.dot",
     "*.py",
     "*.sh",
+    "minify.lua",
+    "manual_minify.lua",
 ]
 
 def is_blacklisted(filepath):
@@ -56,6 +60,7 @@ def parse_dependencies(dot_filepath):
 
     return deps_map
 
+
 def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
     """
     Acts as a strict invariant check. The physical requires in the Lua file
@@ -79,6 +84,28 @@ def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
         print(f" |- Missing in code:     {expected_requires - actual_requires}")
         print(f" |- Undocumented in DOT: {actual_requires - expected_requires}")
         print("\nHalting script. Fix the architecture first.")
+        sys.exit(1)
+
+def validate_c_invariants(file_name, source_code, expected_deps_from_dot):
+    """
+    Strict invariant check for C core files.
+    Physical #include "..." must perfectly match deps_c.dot.
+    """
+    matches = re.findall(r'#include\s+"([^"]+)"', source_code)
+
+    actual_requires = set()
+    for match in matches:
+        actual_requires.add(os.path.basename(match))
+
+    expected_requires = set(expected_deps_from_dot)
+
+    if actual_requires != expected_requires:
+        print(f"\n[FATAL INVARIANT] C Architecture drift detected in '{file_name}'")
+        print(f" |- Expected (deps_c.dot): {expected_requires}")
+        print(f" |- Actual (C source):     {actual_requires}")
+        print(f" |- Missing in code:       {expected_requires - actual_requires}")
+        print(f" |- Undocumented in DOT:   {actual_requires - expected_requires}")
+        print("\nHalting script. Fix the C architecture first.")
         sys.exit(1)
 
 def get_embedding(text):
@@ -111,8 +138,9 @@ def main():
         )
         print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.\n")
 
-    print("Parsing architecture topology...")
-    topology = parse_dependencies(DOT_FILE)
+    print("Parsing architecture topologies...")
+    topology_lua = parse_dependencies(DOT_FILE_LUA)
+    topology_c = parse_dependencies(DOT_FILE_C)
     points = []
 
     print("Scanning directories for module ingestion...\n")
@@ -143,8 +171,20 @@ def main():
 
                     # --- INVARIANT ASSERTION ---
                     if ext == ".lua":
-                        validate_lua_invariants(module_name, source_code, dependencies)
-                        print(f" [VALIDATED] {module_name}.lua strict requires match deps.dot.")
+                            # Lua uses the name without extension
+                            dependencies = topology_lua.get(module_name, [])
+                            validate_lua_invariants(module_name, source_code, dependencies)
+                            print(f" [VALIDATED] {module_name}.lua strict requires match deps.dot.")
+
+                        elif ext in [".c", ".h"]:
+                            # C uses the full filename to differentiate headers from sources
+                            dependencies = topology_c.get(file, [])
+                            validate_c_invariants(file, source_code, dependencies)
+                            print(f" [VALIDATED] {file} strict includes match deps_c.dot.")
+
+                        else:
+                            # GLSL shaders fall through here un-asserted for now
+                            dependencies = []
 
                     contextual_payload = (
                         f"MODULE: {filepath}\n"
