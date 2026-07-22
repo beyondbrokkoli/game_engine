@@ -4,7 +4,7 @@
 EXCLUDE_DIRS=("external" "vendor" "libs" ".git" "build")
 
 # 2. Define specific files or patterns to ignore
-EXCLUDE_FILES=("sqlite3.c" "glad.c" "autogen.lua" "*_test.c" "vulkan_headers.lua" "dkjson.lua")
+EXCLUDE_FILES=("sqlite3.c" "glad.c" "autogen.lua" "*_test.c" "vulkan_headers.lua" "dkjson.lua" "venv")
 
 # 3. Build directory pruning arguments safely
 PRUNE_ARGS=()
