@@ -1,0 +1,17 @@
+digraph WeaverEngineC {
+  node [shape=box, style=filled, fillcolor=lightblue];
+  "vx_vulkan_core.c" -> "vx_vulkan_core.h";
+  "vx_global_state.h" -> "shared_structs.h";
+  "vx_vulkan_render.c" -> "vx_vulkan_render.h";
+  "vx_glfw_multiplexer.c" -> "vx_glfw_multiplexer.h";
+  "vx_vulkan_core.h" -> "vx_global_state.h";
+  "vx_vulkan_render.h" -> "vx_global_state.h";
+  "vx_global_state.c" -> "vx_global_state.h";
+  "shared_structs.h";
+  "main.c" -> "vx_global_state.h";
+  "main.c" -> "vx_glfw_multiplexer.h";
+  "main.c" -> "vx_vulkan_core.h";
+  "main.c" -> "vx_vulkan_render.h";
+  "vx_glfw_multiplexer.h" -> "vx_global_state.h";
+  "vx_net.c" -> "shared_structs.h";
+}
