@@ -1,33 +1,43 @@
 import os
 import re
-import sys
 
+# Track root-level entry points explicitly alongside the lua directory
+ROOT_LUA_FILES = ["build.lua", "main.lua"]
 LUA_DIR = "lua"
-# Regex to catch require("module"), require 'module', or require("module")
+
 REQUIRE_PATTERN = re.compile(r"require\s*(?:\(\s*['\"]([^'\"]+)['\"]\s*\)|['\"]([^'\"]+)['\"])")
+
+def parse_file(filepath, graph):
+    mod_name = os.path.splitext(os.path.basename(filepath))[0]
+    if mod_name not in graph:
+        graph[mod_name] = []
+
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            if line.lstrip().startswith("--"):
+                continue
+
+            matches = REQUIRE_PATTERN.findall(line)
+            for match in matches:
+                req = match[0] if match[0] else match[1]
+                req_clean = req.split('.')[-1]
+                graph[mod_name].append(req_clean)
 
 def scan_dependencies():
     graph = {}
+
+    # 1. Scan root files
+    for root_file in ROOT_LUA_FILES:
+        if os.path.exists(root_file):
+            parse_file(root_file, graph)
+
+    # 2. Scan lua directory
     for root, _, files in os.walk(LUA_DIR):
         for file in files:
-            if not file.endswith(".lua"): continue
+            if file.endswith(".lua"):
+                filepath = os.path.join(root, file)
+                parse_file(filepath, graph)
 
-            filepath = os.path.join(root, file)
-            mod_name = file.replace(".lua", "")
-            graph[mod_name] = []
-
-            with open(filepath, 'r', encoding='utf-8') as f:
-                for line in f:
-                    # Ignore commented lines
-                    if line.lstrip().startswith("--"): continue
-
-                    matches = REQUIRE_PATTERN.findall(line)
-                    for match in matches:
-                        # Extract the captured group that matched
-                        req = match[0] if match[0] else match[1]
-                        # Strip directory paths if you use things like require("dir.module")
-                        req_clean = req.split('.')[-1]
-                        graph[mod_name].append(req_clean)
     return graph
 
 def generate_dot(graph):
@@ -37,10 +47,7 @@ def generate_dot(graph):
             dot.append(f'  "{node}";')
         for edge in edges:
             dot.append(f'  "{node}" -> "{edge}";')
-
     dot.append("}")
-    # The explicit + "\n" here solves the terminal pollution
-    # when you cat the generated deps_c.dot file!
     return "\n".join(dot) + "\n"
 
 if __name__ == "__main__":
@@ -51,4 +58,3 @@ if __name__ == "__main__":
         f.write(dot_output)
 
     print("Generated deps.dot.")
-    print("Run: dot -Tsvg deps.dot -o deps.svg")

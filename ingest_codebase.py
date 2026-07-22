@@ -40,18 +40,18 @@ INGESTION_MANIFEST = [
     # "main.lua",
 
     # 2. Lua Architecture
-    "lua/structs.lua",
-    "lua/registry_export.lua",
+    #"lua/structs.lua",
+    #"lua/registry_export.lua",
     # "lua/tenant_registry.lua", (Add your newly chunked files here!)
 
     # 3. GLSL Shaders
-    "glsl/registry.glsl",
-    "glsl/shared.glsl",
-    "glsl/render.vert",
-    "glsl/render.frag",
+    #"glsl/registry.glsl",
+    #"glsl/shared.glsl",
+    #"glsl/render.vert",
+    #"glsl/render.frag",
 
     # 4. Native C Core
-    "c/shared_structs.h",
+    #"c/shared_structs.h",
     #"c/vx_global_state.h",
     #"c/vx_global_state.c",
     #"c/vx_vulkan_core.h",
