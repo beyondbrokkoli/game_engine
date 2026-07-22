@@ -206,7 +206,7 @@ EXPORT int vx_net_recv_all(RxPacket* out_buffer, int max_count) {
 
         if (recvd < 0) break;
 
-        if (recvd >= 36) {
+        if (recvd >= 60) {
             LockstepPacket* header = (LockstepPacket*)out_buffer[count].data;
             if (header->session_token != g_net.session_token) continue;
 

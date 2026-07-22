@@ -65,8 +65,8 @@ function FSM.init(app_ctx, domain_module)
 
                 if frame.tick ~= ctx.sim_tick_count then
                     for p = 0, MAX_PLAYERS - 1 do
-                        frame.commands[p][0].opcode = 0
-                        frame.commands[p][1].opcode = 0
+                        -- Wipe the full block so local FSM frames compress cleanly too
+                        ffi.fill(frame.commands[p], 16)
                     end
                     frame.state_checksum = 0
                     frame.remote_checksum = 0
