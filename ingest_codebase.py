@@ -5,6 +5,12 @@ import fnmatch
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
+import os
+from google import genai
+
+# The SDK automatically checks os.environ["GEMINI_API_KEY"]
+client = genai.Client()
+
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "weaver_stable"
@@ -38,17 +44,13 @@ def is_blacklisted(filepath):
     return False
 
 def get_embedding(text):
-    headers = {
-        "Authorization": f"Bearer {API_KEY}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "input": f"search_document: {text}",
-        "model": "nomic-embed-text-v1-5"
-    }
-    response = requests.post(EMBED_API_URL, json=payload, headers=headers)
-    response.raise_for_status()
-    return response.json()["data"][0]["embedding"]
+    result = genai.embed_content(
+        model="models/text-embedding-004",
+        content=text,
+        task_type="retrieval_document",
+        title="weaver_engine_source" # Optional, but helps the model map the context
+    )
+    return result['embedding']
 
 def chunk_file(filepath, chunk_size=60, overlap=15):
     """Chunks text by lines with an overlap to maintain context."""
@@ -67,13 +69,16 @@ def main():
     print("Connecting to Qdrant...")
     client = QdrantClient(url=QDRANT_URL)
 
-    # Initialize the collection if it doesn't exist
-    if not client.collection_exists(collection_name=COLLECTION_NAME):
-        client.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=NOMIC_DIMENSIONS, distance=Distance.COSINE),
-        )
-        print(f"Created Qdrant collection '{COLLECTION_NAME}'.")
+    # --- Wipe the slate clean for a fresh session ---
+    if client.collection_exists(collection_name=COLLECTION_NAME):
+        print(f"Purging stale vectors from '{COLLECTION_NAME}'...")
+        client.delete_collection(collection_name=COLLECTION_NAME)
+
+    client.create_collection(
+        collection_name=COLLECTION_NAME,
+        vectors_config=VectorParams(size=NOMIC_DIMENSIONS, distance=Distance.COSINE),
+    )
+    print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.")
 
     points = []
 
