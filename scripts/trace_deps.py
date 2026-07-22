@@ -37,8 +37,11 @@ def generate_dot(graph):
             dot.append(f'  "{node}";')
         for edge in edges:
             dot.append(f'  "{node}" -> "{edge}";')
+
     dot.append("}")
-    return "\n".join(dot)
+    # The explicit + "\n" here solves the terminal pollution
+    # when you cat the generated deps_c.dot file!
+    return "\n".join(dot) + "\n"
 
 if __name__ == "__main__":
     deps = scan_dependencies()
