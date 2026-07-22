@@ -152,18 +152,25 @@ local function main()
         if ctx.net_accumulator >= FIXED_DT then
 
             -- ==============================================================
-            -- [SURGICAL PATCH: TRUE RANDOM HEADLESS SPAM]
-            -- Emulating a chaotic human wildly clicking on the grid
+            -- [SURGICAL PATCH: DOUBLE-BARREL BRUTEFORCE]
+            -- Emulating a chaotic human with high APM (Actions Per Minute)
             -- ==============================================================
-            -- 10% chance to fire an input this tick
-            if math.random(1, 100) <= 100 then
-                -- Pick a completely random tile from the board
-                local random_tile = math.random(0, ctx.total_tiles - 1)
+            -- 15% chance to initiate an action this tick
+            if math.random(1, 100) <= 15 then
 
-                InputCore.HandleTerrainClick(ctx, random_tile)
+                -- COMMAND 1: Fire the first action
+                local random_tile_1 = math.random(0, ctx.total_tiles - 1)
+                InputCore.HandleTerrainClick(ctx, random_tile_1)
+                print(string.format("[BRUTEFORCE] Peer %d clicked tile %d at tick %d (Slot 0)", 
+                    ctx.net_identity, random_tile_1, ctx.sim_tick_count))
 
-                print(string.format("[BRUTEFORCE] Peer %d randomly clicked tile %d at tick %d",
-                    ctx.net_identity, random_tile, ctx.sim_tick_count))
+                -- COMMAND 2: 30% chance to immediately double-click somewhere else
+                if math.random(1, 100) <= 30 then
+                    local random_tile_2 = math.random(0, ctx.total_tiles - 1)
+                    InputCore.HandleTerrainClick(ctx, random_tile_2)
+                    print(string.format("[BRUTEFORCE] -> Peer %d combo-clicked tile %d at tick %d (Slot 1)", 
+                        ctx.net_identity, random_tile_2, ctx.sim_tick_count))
+                end
             end
 
             Pump.send_dynamic_history(ctx)
