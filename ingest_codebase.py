@@ -10,6 +10,19 @@ import requests
 # 2 = GEMINI PROD RUN (Upserts to Qdrant via Google GenAI API)
 RUN_MODE = 1
 
+# --- QDRANT SAFETY CONTROLS ---
+# Set to True ONLY when changing dimensions or wanting to wipe deleted files.
+# Otherwise, deterministic UUIDs will natively overwrite modified files without purging!
+FORCE_FULL_REBUILD = False
+
+# Isolate latent spaces. Nomic and Gemini MUST NOT mix!
+COLLECTION_NAMES = {
+    1: "weaver_dev_nomic",
+    2: "weaver_prod_gemini"
+}
+# Default to nomic safety if Mode 0 is used for some reason
+COLLECTION_NAME = COLLECTION_NAMES.get(RUN_MODE, "weaver_dev_nomic")
+
 if RUN_MODE == 2:
     from google import genai
     client = genai.Client()
@@ -21,7 +34,6 @@ if RUN_MODE in [1, 2]:
 
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
-COLLECTION_NAME = "weaver_stable"
 GEMINI_DIMENSIONS = 768 # Matches both Nomic and Gemini natively!
 
 LOCAL_EMBED_URL = "http://10.0.0.2:8081/v1/embeddings"
@@ -32,36 +44,9 @@ DOT_FILE_C = "deps_c.dot"
 DOT_FILE_GLSL = "deps_glsl.dot"
 
 # --- THE ABSOLUTE SOURCE OF TRUTH ---
-# Only files explicitly listed here will be validated and vectorized.
-# No blacklists. No os.walk. No accidents.
 INGESTION_MANIFEST = [
-    # 1. Orchestration
     "build.lua",
-    # "main.lua",
-
-    # 2. Lua Architecture
-    #"lua/structs.lua",
-    #"lua/registry_export.lua",
-    # "lua/tenant_registry.lua", (Add your newly chunked files here!)
-
-    # 3. GLSL Shaders
-    #"glsl/registry.glsl",
-    #"glsl/shared.glsl",
-    #"glsl/render.vert",
-    #"glsl/render.frag",
-
-    # 4. Native C Core
-    #"c/shared_structs.h",
-    #"c/vx_global_state.h",
-    #"c/vx_global_state.c",
-    #"c/vx_vulkan_core.h",
-    #"c/vx_vulkan_core.c",
-    #"c/vx_vulkan_render.h",
-    #"c/vx_vulkan_render.c",
-    #"c/vx_glfw_multiplexer.h",
-    #"c/vx_glfw_multiplexer.c",
-    #"c/vx_net.c",
-    #"c/main.c"
+    # Add your heavily chunked files here as you refactor them!
 ]
 
 def parse_dependencies(dot_filepath):
@@ -149,23 +134,29 @@ def main():
     if RUN_MODE == 0:
         print("\n=== MODE 0: DRY RUN VALIDATION ONLY ===")
     elif RUN_MODE == 1:
-        print("\n=== MODE 1: LOCAL NOMIC EMBEDDING RUN ===")
+        print(f"\n=== MODE 1: LOCAL NOMIC EMBEDDING RUN ({COLLECTION_NAME}) ===")
     elif RUN_MODE == 2:
-        print("\n=== MODE 2: GEMINI API PRODUCTION RUN ===")
+        print(f"\n=== MODE 2: GEMINI API PRODUCTION RUN ({COLLECTION_NAME}) ===")
 
     if RUN_MODE in [1, 2]:
         print("Connecting to Qdrant...")
         qdrant = QdrantClient(url=QDRANT_URL)
 
-        if qdrant.collection_exists(collection_name=COLLECTION_NAME):
-            print(f"Purging stale vectors from '{COLLECTION_NAME}'...")
-            qdrant.delete_collection(collection_name=COLLECTION_NAME)
+        collection_exists = qdrant.collection_exists(collection_name=COLLECTION_NAME)
 
-        qdrant.create_collection(
-            collection_name=COLLECTION_NAME,
-            vectors_config=VectorParams(size=GEMINI_DIMENSIONS, distance=Distance.COSINE),
-        )
-        print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.\n")
+        if collection_exists and FORCE_FULL_REBUILD:
+            print(f" [!] FORCE_FULL_REBUILD is ON. Purging '{COLLECTION_NAME}'...")
+            qdrant.delete_collection(collection_name=COLLECTION_NAME)
+            collection_exists = False
+
+        if not collection_exists:
+            print(f" [*] Creating fresh Qdrant collection '{COLLECTION_NAME}'...")
+            qdrant.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(size=GEMINI_DIMENSIONS, distance=Distance.COSINE),
+            )
+        else:
+            print(f" [*] Database active. Overwriting existing UUIDs without purging.")
 
     print("Parsing architecture topologies...")
     topology_lua = parse_dependencies(DOT_FILE_LUA)
@@ -193,19 +184,16 @@ def main():
 
         # --- INVARIANT ASSERTION & DEPENDENCY RESOLUTION ---
         if ext == ".lua":
-            # For Lua, we query the DOT file using just the module name (e.g. 'structs')
             dependencies = topology_lua.get(module_name, [])
             validate_lua_invariants(module_name, source_code, dependencies)
             print(f" [VALIDATED] {module_name}.lua strict requires match deps.dot.")
 
         elif ext in [".c", ".h"]:
-            # For C, we query the DOT file using the full filename (e.g. 'main.c')
             dependencies = topology_c.get(filename, [])
             validate_include_invariants(filename, source_code, dependencies, domain="C")
             print(f" [VALIDATED] {filename} strict includes match deps_c.dot.")
 
         elif ext in [".glsl", ".frag", ".vert"]:
-            # For GLSL, we query using the full filename (e.g. 'render.vert')
             dependencies = topology_glsl.get(filename, [])
             validate_include_invariants(filename, source_code, dependencies, domain="GLSL")
             print(f" [VALIDATED] {filename} strict includes match deps_glsl.dot.")
@@ -254,3 +242,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ==============================================================================
+# QDRANT SNAPSHOT CHEAT SHEET
+# ==============================================================================
+# When your DB hits a milestone, drop these commands into a Python shell:
+#
+# from qdrant_client import QdrantClient
+# qdrant = QdrantClient(url="http://localhost:6333")
+#
+# 1. CREATE SNAPSHOT:
+# qdrant.create_snapshot(collection_name="weaver_prod_gemini")
+#
+# 2. LIST SNAPSHOTS:
+# print(qdrant.list_snapshots(collection_name="weaver_prod_gemini"))
+#
+# 3. RESTORE SNAPSHOT (Requires full physical path on the Qdrant host):
+# qdrant.recover_snapshot(
+#     collection_name="weaver_prod_gemini",
+#     location="file:///qdrant/snapshots/weaver_prod_gemini/weaver_prod_gemini-2026-07-22-10-31-53.snapshot"
+# ) [1]
+# ==============================================================================

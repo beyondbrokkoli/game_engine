@@ -14,7 +14,13 @@ from qdrant_client import QdrantClient
 
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
-COLLECTION_NAME = "weaver_stable"
+
+# Route queries to the correct isolated database based on the mode
+COLLECTION_NAMES = {
+    1: "weaver_dev_nomic",
+    2: "weaver_prod_gemini"
+}
+COLLECTION_NAME = COLLECTION_NAMES.get(RUN_MODE, "weaver_dev_nomic")
 
 # Local Server Endpoints
 LOCAL_EMBED_URL = "http://10.0.0.2:8081/v1/embeddings"
@@ -111,9 +117,9 @@ if __name__ == "__main__":
     context = search_codebase(query)
 
     if RUN_MODE == 1:
-        print("🤖 Local DeepSeek is thinking...")
+        print(f"🤖 Local DeepSeek is thinking... (DB: {COLLECTION_NAME})")
     else:
-        print("🤖 Gemini is thinking...")
+        print(f"🤖 Gemini is thinking... (DB: {COLLECTION_NAME})")
 
     response = ask_llm(query, context)
 
