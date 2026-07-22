@@ -3,21 +3,31 @@ import sys
 import uuid
 import fnmatch
 import re
+import requests
 
-# --- Toggle for Local Architecture Validation ---
-# Set to False when you actually want to hit Gemini and upsert to Qdrant.
-DRY_RUN_VALIDATION_ONLY = True
+# --- EXECUTION MODE ---
+# 0 = STRICT VALIDATION ONLY (Dry Run, No DB, No LLM)
+# 1 = LOCAL LLM TEST RUN (Upserts to Qdrant via Nomic 10.0.0.2)
+# 2 = GEMINI PROD RUN (Upserts to Qdrant via Google GenAI API)
+RUN_MODE = 1
 
-if not DRY_RUN_VALIDATION_ONLY:
-    from qdrant_client import QdrantClient
-    from qdrant_client.models import Distance, VectorParams, PointStruct
+if RUN_MODE == 2:
     from google import genai
     client = genai.Client()
+    print("[SYSTEM] Loaded Google GenAI SDK.")
+
+if RUN_MODE in [1, 2]:
+    from qdrant_client import QdrantClient
+    from qdrant_client.models import Distance, VectorParams, PointStruct
 
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
 COLLECTION_NAME = "weaver_stable"
-GEMINI_DIMENSIONS = 768
+GEMINI_DIMENSIONS = 768 # Matches both Nomic and Gemini natively!
+
+# Nomic Local Host Settings
+LOCAL_EMBED_URL = "http://10.0.0.2:8081/v1/embeddings"
+LOCAL_API_KEY = "TEST1234"
 
 TARGET_DIRS = ["c", "lua", "glsl", "scripts"]
 ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert"}
@@ -61,12 +71,7 @@ def parse_dependencies(dot_filepath):
 
     return deps_map
 
-
 def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
-    """
-    Acts as a strict invariant check. The physical requires in the Lua file
-    MUST perfectly match the declared edges in deps.dot.
-    """
     matches = re.findall(r'require\s*\(\s*["\']([^"\']+)["\']\s*\)|require\s+["\']([^"\']+)["\']', source_code)
 
     actual_requires = set()
@@ -88,10 +93,6 @@ def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
         sys.exit(1)
 
 def validate_include_invariants(file_name, source_code, expected_deps_from_dot, domain="C"):
-    """
-    Strict invariant check for Native (C) and Shader (GLSL) files.
-    Physical #include "..." must perfectly match the respective .dot file.
-    """
     matches = re.findall(r'#include\s+"([^"]+)"', source_code)
 
     actual_requires = set()
@@ -107,27 +108,45 @@ def validate_include_invariants(file_name, source_code, expected_deps_from_dot, 
         print(f" |- Missing in code:       {expected_requires - actual_requires}")
         print(f" |- Undocumented in DOT:   {actual_requires - expected_requires}")
         print(f"\nHalting script. Fix the {domain} architecture first.")
-        import sys
         sys.exit(1)
 
 def get_embedding(text):
-    if DRY_RUN_VALIDATION_ONLY:
+    if RUN_MODE == 0:
         return []
-    response = client.models.embed_content(
-        model="text-embedding-004",
-        contents=text,
-        config=dict(
-            task_type="RETRIEVAL_DOCUMENT",
-            title="weaver_engine_source"
+
+    elif RUN_MODE == 1:
+        # Route through Local Nomic llama-server
+        headers = {
+            "Authorization": f"Bearer {LOCAL_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {"input": text}
+        response = requests.post(LOCAL_EMBED_URL, headers=headers, json=payload)
+        response.raise_for_status()
+        return response.json()['data'][0]['embedding']
+
+    elif RUN_MODE == 2:
+        # Route through Gemini API
+        response = client.models.embed_content(
+            model="text-embedding-004",
+            contents=text,
+            config=dict(
+                task_type="RETRIEVAL_DOCUMENT",
+                title="weaver_engine_source"
+            )
         )
-    )
-    return response.embeddings[0].values
+        return response.embeddings[0].values
 
 def main():
-    if DRY_RUN_VALIDATION_ONLY:
-        print("\n=== DRY RUN MODE: Validating Architecture Invariants Only ===")
-    else:
-        print("\nConnecting to Qdrant...")
+    if RUN_MODE == 0:
+        print("\n=== MODE 0: DRY RUN VALIDATION ONLY ===")
+    elif RUN_MODE == 1:
+        print("\n=== MODE 1: LOCAL NOMIC EMBEDDING RUN ===")
+    elif RUN_MODE == 2:
+        print("\n=== MODE 2: GEMINI API PRODUCTION RUN ===")
+
+    if RUN_MODE in [1, 2]:
+        print("Connecting to Qdrant...")
         qdrant = QdrantClient(url=QDRANT_URL)
 
         if qdrant.collection_exists(collection_name=COLLECTION_NAME):
@@ -196,7 +215,7 @@ def main():
                         f"SOURCE CODE:\n{source_code}"
                     )
 
-                    if DRY_RUN_VALIDATION_ONLY:
+                    if RUN_MODE == 0:
                         print(f" [DRY RUN] Would vectorize: {filepath} (Deps: {len(dependencies)})")
                     else:
                         print(f" [OK] Vectorizing Module: {filepath} (Deps: {len(dependencies)})")
@@ -214,7 +233,7 @@ def main():
                             }
                         ))
 
-    if DRY_RUN_VALIDATION_ONLY:
+    if RUN_MODE == 0:
         print("\n=== DRY RUN COMPLETE: All invariants passed! ===")
         print(f"Would have upserted {len(TARGET_DIRS)} directories worth of modules.")
     elif points:
