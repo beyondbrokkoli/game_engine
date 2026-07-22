@@ -1,6 +1,7 @@
 import os
 import uuid
 import fnmatch
+import re
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from google import genai
@@ -14,30 +15,45 @@ COLLECTION_NAME = "weaver_stable"
 GEMINI_DIMENSIONS = 768  # Native dimension size for text-embedding-004
 
 TARGET_DIRS = ["c", "lua", "glsl", "scripts"]
-ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert", ".py", ".sh"}
+ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert"}
+DOT_FILE = "deps.dot"
 
-# --- Blacklist ---
-# Accepts exact filenames or wildcards
 BLACKLIST = [
     "vulkan_headers.lua",
-    "*.spv", # Ignore compiled shaders just in case
+    "*.spv",
+    "dkjson.lua",
+    "*.dot",
     "*.py",
-    "*.md",
     "*.sh",
-    "deps.dot",
-    "dkjson.lua"
 ]
 
 def is_blacklisted(filepath):
-    """Checks if the file matches any pattern in the blacklist."""
     filename = os.path.basename(filepath)
     for pattern in BLACKLIST:
         if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(filepath, pattern):
             return True
     return False
 
+def parse_dependencies(dot_filepath):
+    """Parses the Graphviz DOT file to build a dependency map."""
+    deps_map = {}
+    if not os.path.exists(dot_filepath):
+        print(f"[-] Dependency graph '{dot_filepath}' not found. Skipping topology injection.")
+        return deps_map
+
+    with open(dot_filepath, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    # Matches: "module_a" -> "module_b";
+    edges = re.findall(r'"([^"]+)"\s*->\s*"([^"]+)"', content)
+    for source, target in edges:
+        if source not in deps_map:
+            deps_map[source] = []
+        deps_map[source].append(target)
+
+    return deps_map
+
 def get_embedding(text):
-    """Generates an embedding vector using Gemini."""
     response = client.models.embed_content(
         model="text-embedding-004",
         contents=text,
@@ -48,26 +64,10 @@ def get_embedding(text):
     )
     return response.embeddings[0].values
 
-def chunk_file(filepath, chunk_size=60, overlap=15):
-    """Chunks text by lines with an overlap to maintain context."""
-    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
-        lines = f.read().split('\n')
-
-    chunks = []
-    # Using max(1, ...) to prevent step size 0 if overlap >= chunk_size
-    step = max(1, chunk_size - overlap) 
-    for i in range(0, len(lines), step):
-        chunk_lines = lines[i:i + chunk_size]
-        chunk_text = '\n'.join(chunk_lines).strip()
-        if chunk_text:
-            chunks.append(chunk_text)
-    return chunks
-
 def main():
     print("Connecting to Qdrant...")
     qdrant = QdrantClient(url=QDRANT_URL)
 
-    # --- Wipe the slate clean for a fresh session ---
     if qdrant.collection_exists(collection_name=COLLECTION_NAME):
         print(f"Purging stale vectors from '{COLLECTION_NAME}'...")
         qdrant.delete_collection(collection_name=COLLECTION_NAME)
@@ -76,11 +76,14 @@ def main():
         collection_name=COLLECTION_NAME,
         vectors_config=VectorParams(size=GEMINI_DIMENSIONS, distance=Distance.COSINE),
     )
-    print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.")
+    print(f"Created fresh Qdrant collection '{COLLECTION_NAME}'.\n")
 
+    # Load architecture topology
+    print("Parsing architecture topology...")
+    topology = parse_dependencies(DOT_FILE)
     points = []
 
-    print("Scanning directories...")
+    print("Scanning directories for module ingestion...")
     for directory in TARGET_DIRS:
         if not os.path.exists(directory):
             continue
@@ -88,40 +91,55 @@ def main():
         for root, _, files in os.walk(directory):
             for file in files:
                 ext = os.path.splitext(file)[1].lower()
+                module_name = os.path.splitext(file)[0]
+
                 if ext in ALLOWED_EXTENSIONS:
                     filepath = os.path.join(root, file)
 
-                    # Intercept blacklisted files before chunking
                     if is_blacklisted(filepath):
-                        print(f"Ignored (Blacklisted): {filepath}")
+                        print(f" [SKIP] Blacklisted: {filepath}")
                         continue
 
-                    print(f"Processing: {filepath}")
+                    with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                        source_code = f.read().strip()
 
-                    chunks = chunk_file(filepath)
-                    for idx, chunk in enumerate(chunks):
-                        vector = get_embedding(chunk)
+                    if not source_code:
+                        continue
 
-                        # Generate a deterministic UUID
-                        point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{filepath}_{idx}"))
+                    # Construct the architecture-aware payload
+                    dependencies = topology.get(module_name, [])
+                    dep_string = ", ".join(dependencies) if dependencies else "None (Level 0 / Root)"
 
-                        points.append(PointStruct(
-                            id=point_id,
-                            vector=vector,
-                            payload={
-                                "file": filepath,
-                                "chunk_index": idx,
-                                "content": chunk
-                            }
-                        ))
+                    contextual_payload = (
+                        f"MODULE: {filepath}\n"
+                        f"DEPENDENCIES: {dep_string}\n"
+                        f"SOURCE CODE:\n{source_code}"
+                    )
+
+                    print(f" [OK] Vectorizing Module: {filepath} (Deps: {len(dependencies)})")
+                    vector = get_embedding(contextual_payload)
+
+                    # 1 File = 1 Chunk. UUID is generated cleanly from the filepath.
+                    point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, filepath))
+
+                    points.append(PointStruct(
+                        id=point_id,
+                        vector=vector,
+                        payload={
+                            "file": filepath,
+                            "dependencies": dependencies,
+                            "content": source_code,  # Keep the raw code clean for the LLM output
+                            "full_context": contextual_payload
+                        }
+                    ))
 
     if points:
-        print(f"\nUpserting {len(points)} chunks into Qdrant...")
+        print(f"\nUpserting {len(points)} modules into Qdrant...")
         qdrant.upsert(
             collection_name=COLLECTION_NAME,
             points=points
         )
-        print("Codebase successfully indexed!")
+        print("Codebase successfully indexed and mapped!")
     else:
         print("No valid files found to index.")
 
