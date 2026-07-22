@@ -156,7 +156,7 @@ local function main()
             -- Emulating a chaotic human wildly clicking on the grid
             -- ==============================================================
             -- 10% chance to fire an input this tick
-            if math.random(1, 100) <= 10 then
+            if math.random(1, 100) <= 100 then
                 -- Pick a completely random tile from the board
                 local random_tile = math.random(0, ctx.total_tiles - 1)
 
