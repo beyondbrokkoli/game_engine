@@ -1,6 +1,7 @@
 import os
 import uuid
 import fnmatch
+import sys
 import re
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
@@ -26,6 +27,37 @@ BLACKLIST = [
     "*.py",
     "*.sh",
 ]
+
+def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
+    """
+    Acts as a strict invariant check. The physical requires in the Lua file
+    MUST perfectly match the declared edges in deps.dot.
+    """
+    # Extract physical 'require' statements from the Lua source
+    # Matches: require("module") or require 'module'
+    matches = re.findall(r'require\s*\(\s*["\']([^"\']+)["\']\s*\)|require\s+["\']([^"\']+)["\']', source_code)
+
+    # Flatten the tuple results from the regex and clean them up
+    actual_requires = set()
+    for match in matches:
+        req = match[0] if match[0] else match[1]
+        # Ignore external standard libraries like 'ffi', 'math', 'bit' if you don't track them in the dot file
+        if req not in ["ffi", "math", "bit", "os", "io", "string"]:
+            actual_requires.add(req)
+
+    expected_requires = set(expected_deps_from_dot)
+
+    # Remove standard libraries from expected if they snuck into the DOT file
+    expected_requires = {dep for dep in expected_requires if dep not in ["ffi", "math", "bit"]}
+
+    if actual_requires != expected_requires:
+        print(f"\n[FATAL INVARIANT] Architecture drift detected in '{module_name}.lua'")
+        print(f" |- Expected (deps.dot): {expected_requires}")
+        print(f" |- Actual (Lua source): {actual_requires}")
+        print(f" |- Missing in code: {expected_requires - actual_requires}")
+        print(f" |- Undocumented in DOT: {actual_requires - expected_requires}")
+        print("\nHalting vector ingestion. Fix the architecture first.")
+        sys.exit(1)
 
 def is_blacklisted(filepath):
     filename = os.path.basename(filepath)
