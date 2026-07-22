@@ -144,14 +144,14 @@ local function main()
     print("[WEAVER] Global Async Overlord is LIVE.")
 
     -- 1. Boot Tenant 0 (Primary Game View)
-    TenantRegistry.boot_tenant(vk_rt, 0, cfg_gfx.win.w, cfg_gfx.win.h, cfg_gfx.cfg.frame_slots)
-    TenantRegistry.active[0].gfx = graphics_mod.Init(
-        vk_rt.vk, vk_rt,
-        cfg_gfx.win.w, cfg_gfx.win.h,
-        desc.pipelineLayout,
-        TenantRegistry.active[0].sc.format,
-        manifest.graphics
-    )
+--    TenantRegistry.boot_tenant(vk_rt, 0, cfg_gfx.win.w, cfg_gfx.win.h, cfg_gfx.cfg.frame_slots)
+--    TenantRegistry.active[0].gfx = graphics_mod.Init(
+--        vk_rt.vk, vk_rt,
+--        cfg_gfx.win.w, cfg_gfx.win.h,
+--        desc.pipelineLayout,
+--        TenantRegistry.active[0].sc.format,
+--        manifest.graphics
+--    )
 
     -- 2. Boot Tenant 1 (Editor)
 --    TenantRegistry.boot_tenant(vk_rt, 1, 800, 600, cfg_gfx.cfg.frame_slots)
