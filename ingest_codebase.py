@@ -1,12 +1,13 @@
 import os
 import uuid
 import requests
+import fnmatch
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 
 # --- Configuration ---
 QDRANT_URL = "http://localhost:6333"
-COLLECTION_NAME = "weaver_stable" # Change to 'weaver_borked' when indexing the refactor repo
+COLLECTION_NAME = "weaver_stable"
 
 # Nomic Embedding Server
 EMBED_API_URL = "http://10.0.0.2:8081/v1/embeddings"
@@ -16,13 +17,33 @@ NOMIC_DIMENSIONS = 768
 TARGET_DIRS = ["c", "lua", "glsl", "scripts"]
 ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert", ".py", ".sh"}
 
+# --- Blacklist ---
+# Accepts exact filenames or wildcards
+BLACKLIST = [
+    "vulkan_headers.lua",
+    "*.spv", # Ignore compiled shaders just in case
+    "*.py",
+    "*.md",
+    "*.sh",
+    "deps.dot",
+    "dkjson.lua"
+]
+
+def is_blacklisted(filepath):
+    """Checks if the file matches any pattern in the blacklist."""
+    filename = os.path.basename(filepath)
+    for pattern in BLACKLIST:
+        if fnmatch.fnmatch(filename, pattern) or fnmatch.fnmatch(filepath, pattern):
+            return True
+    return False
+
 def get_embedding(text):
     headers = {
         "Authorization": f"Bearer {API_KEY}",
         "Content-Type": "application/json"
     }
     payload = {
-        "input": text,
+        "input": f"search_document: {text}",
         "model": "nomic-embed-text-v1-5"
     }
     response = requests.post(EMBED_API_URL, json=payload, headers=headers)
@@ -66,13 +87,19 @@ def main():
                 ext = os.path.splitext(file)[1].lower()
                 if ext in ALLOWED_EXTENSIONS:
                     filepath = os.path.join(root, file)
+
+                    # Intercept blacklisted files before chunking
+                    if is_blacklisted(filepath):
+                        print(f"Ignored (Blacklisted): {filepath}")
+                        continue
+
                     print(f"Processing: {filepath}")
 
                     chunks = chunk_file(filepath)
                     for idx, chunk in enumerate(chunks):
                         vector = get_embedding(chunk)
 
-                        # Generate a deterministic UUID based on the filepath and chunk index
+                        # Generate a deterministic UUID
                         point_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"{filepath}_{idx}"))
 
                         points.append(PointStruct(
@@ -86,14 +113,14 @@ def main():
                         ))
 
     if points:
-        print(f"Upserting {len(points)} chunks into Qdrant...")
+        print(f"\nUpserting {len(points)} chunks into Qdrant...")
         client.upsert(
             collection_name=COLLECTION_NAME,
             points=points
         )
         print("Codebase successfully indexed!")
     else:
-        print("No valid files found.")
+        print("No valid files found to index.")
 
 if __name__ == "__main__":
     main()
