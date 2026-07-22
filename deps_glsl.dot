@@ -1,0 +1,7 @@
+digraph WeaverEngineGLSL {
+  node [shape=box, style=filled, fillcolor=lightgreen];
+  "registry.glsl";
+  "render.vert" -> "shared.glsl";
+  "render.frag" -> "shared.glsl";
+  "shared.glsl" -> "registry.glsl";
+}

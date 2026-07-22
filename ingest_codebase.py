@@ -24,6 +24,7 @@ ALLOWED_EXTENSIONS = {".c", ".h", ".lua", ".glsl", ".frag", ".vert"}
 
 DOT_FILE_LUA = "deps.dot"
 DOT_FILE_C = "deps_c.dot"
+DOT_FILE_GLSL = "deps_glsl.dot"
 
 BLACKLIST = [
     "vulkan_headers.lua",
@@ -86,10 +87,10 @@ def validate_lua_invariants(module_name, source_code, expected_deps_from_dot):
         print("\nHalting script. Fix the architecture first.")
         sys.exit(1)
 
-def validate_c_invariants(file_name, source_code, expected_deps_from_dot):
+def validate_include_invariants(file_name, source_code, expected_deps_from_dot, domain="C"):
     """
-    Strict invariant check for C core files.
-    Physical #include "..." must perfectly match deps_c.dot.
+    Strict invariant check for Native (C) and Shader (GLSL) files.
+    Physical #include "..." must perfectly match the respective .dot file.
     """
     matches = re.findall(r'#include\s+"([^"]+)"', source_code)
 
@@ -100,12 +101,13 @@ def validate_c_invariants(file_name, source_code, expected_deps_from_dot):
     expected_requires = set(expected_deps_from_dot)
 
     if actual_requires != expected_requires:
-        print(f"\n[FATAL INVARIANT] C Architecture drift detected in '{file_name}'")
-        print(f" |- Expected (deps_c.dot): {expected_requires}")
-        print(f" |- Actual (C source):     {actual_requires}")
+        print(f"\n[FATAL INVARIANT] {domain} Architecture drift detected in '{file_name}'")
+        print(f" |- Expected (deps_{domain.lower()}.dot): {expected_requires}")
+        print(f" |- Actual ({domain} source):     {actual_requires}")
         print(f" |- Missing in code:       {expected_requires - actual_requires}")
         print(f" |- Undocumented in DOT:   {actual_requires - expected_requires}")
-        print("\nHalting script. Fix the C architecture first.")
+        print(f"\nHalting script. Fix the {domain} architecture first.")
+        import sys
         sys.exit(1)
 
 def get_embedding(text):
@@ -141,6 +143,7 @@ def main():
     print("Parsing architecture topologies...")
     topology_lua = parse_dependencies(DOT_FILE_LUA)
     topology_c = parse_dependencies(DOT_FILE_C)
+    topology_glsl = parse_dependencies(DOT_FILE_GLSL)
     points = []
 
     print("Scanning directories for module ingestion...\n")
@@ -174,14 +177,17 @@ def main():
 
                     elif ext in [".c", ".h"]:
                         dependencies = topology_c.get(file, [])
-                        validate_c_invariants(file, source_code, dependencies)
+                        validate_include_invariants(file, source_code, dependencies, domain="C")
                         print(f" [VALIDATED] {file} strict includes match deps_c.dot.")
 
+                    elif ext in [".glsl", ".frag", ".vert"]:
+                        dependencies = topology_glsl.get(file, [])
+                        validate_include_invariants(file, source_code, dependencies, domain="GLSL")
+                        print(f" [VALIDATED] {file} strict includes match deps_glsl.dot.")
+
                     else:
-                        # GLSL shaders fall through here un-asserted for now
                         dependencies = []
 
-                    # Now that dependencies is safely defined by the correct topology, build the string
                     dep_string = ", ".join(dependencies) if dependencies else "None (Level 0 / Root)"
 
                     contextual_payload = (
